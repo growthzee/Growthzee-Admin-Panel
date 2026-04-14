@@ -1,0 +1,146 @@
+// prisma/schema.prisma
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-1.0.x", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Employee {
+  id             String         @id @default(cuid())
+  name           String
+  email          String         @unique
+  password       String?
+  portalEnabled  Boolean        @default(false)
+  phone          String?
+  department     String
+  position       String
+  avatar         String?
+  status         EmployeeStatus @default(ACTIVE)
+  joinedAt       DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  tasks          Task[]
+  clientTasks    ClientTask[]
+  attendance     Attendance[]
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  title       String
+  description String?
+  status      TaskStatus @default(PENDING)
+  priority    Priority   @default(MEDIUM)
+  startDate   DateTime
+  endDate     DateTime
+  completedAt DateTime?
+  employeeId  String
+  employee    Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Client {
+  id            String       @id @default(cuid())
+  name          String
+  email         String       @unique
+  password      String?
+  phone         String?
+  company       String?
+  website       String?
+  notes         String?
+  status        ClientStatus @default(ACTIVE)
+  portalEnabled Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  clientTasks   ClientTask[]
+}
+
+model ClientTask {
+  id          String           @id @default(cuid())
+  title       String
+  description String?
+  category    String?
+  subCategory String?
+  taskType    String?
+  status      ClientTaskStatus @default(PENDING)
+  priority    Priority         @default(MEDIUM)
+  startDate   DateTime
+  endDate     DateTime
+  completedAt DateTime?
+  clientId    String
+  client      Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  employeeId  String?
+  employee    Employee?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+  PROSPECT
+}
+
+enum ClientTaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CHANGES_REQUIRED
+  OVERDUE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Attendance {
+  id         String           @id @default(cuid())
+  employeeId String
+  employee   Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date       DateTime         @db.Date
+  status     AttendanceStatus @default(PRESENT)
+  note       String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@unique([employeeId, date])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  LEAVE
+  HOLIDAY
+  WEEKEND
+}
