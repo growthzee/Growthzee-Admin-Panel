@@ -72,7 +72,7 @@ export default function AttendancePage() {
 
   const cells = Array.from({length:daysInMonth},(_,i)=>{
     const day=i+1, d=new Date(yr,mo-1,day), k=dk(d), dow=d.getDay();
-    const isWeekend=dow===0||dow===6;
+    const isWeekend=dow===0;
     return { day, k, isWeekend, isToday:k===todayKey, isFuture:d>today, rec:records.get(k), status:records.get(k)?.status||(isWeekend?"WEEKEND":undefined) };
   });
 
@@ -217,6 +217,7 @@ export default function AttendancePage() {
                     borderBottom: "1px solid #0a0a0a",
                     background: isSel ? "var(--surface-3)" : isToday ? "var(--surface-2)" : undefined,
                     cursor: (isFuture||isWeekend) ? "default" : "pointer",
+                    opacity: isWeekend ? 0.35 : 1,
                   }}>
                   {/* Day number */}
                   <div style={{ display:"flex", alignItems:"start", justifyContent:"space-between", marginBottom:4 }}>
@@ -268,7 +269,7 @@ export default function AttendancePage() {
           <p className="section-title">Monthly Summary — {MONTHS[mo-1]} {yr}</p>
         </div>
         {[
-          ["Working Days", workDays, "total weekdays"],
+          ["Working Days", workDays, "Mon – Sat"],
           ["Days Present", present, "full attendance"],
           ["Half Days", halfDay, `= ${halfDay*0.5} days`],
           ["Days on Leave", leave, "approved"],
