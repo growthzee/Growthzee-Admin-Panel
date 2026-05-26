@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import Script from "next/script";
 
 export const metadata: Metadata = {
   title: "EmpAdmin",
@@ -25,6 +26,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             })();
           `
         }} />
+        <Script
+  src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"
+  strategy="beforeInteractive"
+/>
       </head>
       <body>{children}</body>
     </html>
