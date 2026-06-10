@@ -11,6 +11,42 @@ const STATUSES = ["ACTIVE","INACTIVE","ON_LEAVE"];
 const S_BADGE: Record<string,string>  = { ACTIVE:"badge-green", INACTIVE:"badge-red", ON_LEAVE:"badge-amber" };
 const S_LABEL: Record<string,string>  = { ACTIVE:"Active", INACTIVE:"Inactive", ON_LEAVE:"On leave" };
 
+// Employee birthdays (DD/MM/YYYY)
+const EMPLOYEE_BIRTHDAYS: Record<string, string> = {
+  "Simran Singh":          "17/10/2001",
+  "Ayan Pakhira":          "19/07/1995",
+  "Ashutosh Bhaskar":      "31/03/1997",
+  "Arindam Biswas":        "28/10/2003",
+  "Ritik Singh":           "20/08/2001",
+  "Riya Kashyap":          "09/05/1999",
+  "Ashlesha Kadwey":       "15/06/2002",
+  "Pankaj Chandrawanshi":  "25/01/2000",
+};
+
+type BirthdayStatus = "today" | "tomorrow" | null;
+
+function getBirthdayStatus(name: string): BirthdayStatus {
+  const dob = EMPLOYEE_BIRTHDAYS[name];
+  if (!dob) return null;
+
+  const [dd, mm] = dob.split("/").map(Number);
+  const now      = new Date();
+
+  const today     = { d: now.getDate(),                          m: now.getMonth() + 1 };
+  const tmrw      = new Date(now); tmrw.setDate(tmrw.getDate() + 1);
+  const tomorrow  = { d: tmrw.getDate(),                         m: tmrw.getMonth() + 1 };
+
+  if (dd === today.d    && mm === today.m)    return "today";
+  if (dd === tomorrow.d && mm === tomorrow.m) return "tomorrow";
+  return null;
+}
+
+function getBirthdayAlerts(): { name: string; status: BirthdayStatus }[] {
+  return Object.keys(EMPLOYEE_BIRTHDAYS)
+    .map(name => ({ name, status: getBirthdayStatus(name) }))
+    .filter(b => b.status !== null);
+}
+
 function Modal({ emp, onClose, onSave }: { emp?: Employee|null; onClose:()=>void; onSave:()=>void }) {
   const [f, setF] = useState({ name:emp?.name||"", email:emp?.email||"", phone:emp?.phone||"", department:emp?.department||DEPTS[0], position:emp?.position||"", status:emp?.status||"ACTIVE" });
   const [loading, setLoading] = useState(false);
@@ -102,6 +138,11 @@ export default function EmployeesPage() {
   const [dept, setDept] = useState("");
   const [modal, setModal] = useState<"add"|"edit"|"delete"|null>(null);
   const [selected, setSelected] = useState<Employee|null>(null);
+  const [birthdayAlerts, setBirthdayAlerts] = useState<{ name: string; status: BirthdayStatus }[]>([]);
+
+  useEffect(() => {
+    setBirthdayAlerts(getBirthdayAlerts());
+  }, []);
 
   const fetchEmployees = useCallback(async () => {
     setLoading(true);
@@ -114,9 +155,111 @@ export default function EmployeesPage() {
 
   useEffect(() => { const t = setTimeout(fetchEmployees, 300); return () => clearTimeout(t); }, [fetchEmployees]);
 
+  const todayBirthdays    = birthdayAlerts.filter(b => b.status === "today");
+  const tomorrowBirthdays = birthdayAlerts.filter(b => b.status === "tomorrow");
+
   return (
     <div className="page-section">
-      <style>{`.tbl tbody tr:hover .row-actions{opacity:1!important}`}</style>
+      <style>{`
+        .tbl tbody tr:hover .row-actions{opacity:1!important}
+
+        @keyframes bday-shimmer {
+          0%   { background-position: -400px 0; }
+          100% { background-position:  400px 0; }
+        }
+        @keyframes bday-float {
+          0%, 100% { transform: translateY(0px); }
+          50%       { transform: translateY(-3px); }
+        }
+        .bday-banner-today {
+          position: relative;
+          overflow: hidden;
+          border-radius: 14px;
+          margin-bottom: 18px;
+          padding: 18px 22px;
+          background: linear-gradient(135deg, #7c3aed 0%, #a855f7 40%, #ec4899 80%, #f97316 100%);
+          box-shadow: 0 4px 24px 0 rgba(124,58,237,.35);
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          animation: bday-float 3s ease-in-out infinite;
+        }
+        .bday-banner-today::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.18) 50%, transparent 100%);
+          background-size: 400px 100%;
+          animation: bday-shimmer 2.4s linear infinite;
+          pointer-events: none;
+        }
+        .bday-banner-tomorrow {
+          border-radius: 14px;
+          margin-bottom: 18px;
+          padding: 14px 20px;
+          background: linear-gradient(135deg, rgba(99,102,241,.12) 0%, rgba(168,85,247,.10) 100%);
+          border: 1.5px solid rgba(124,58,237,.30);
+          display: flex;
+          align-items: center;
+          gap: 14px;
+        }
+        .bday-emoji    { font-size: 30px; flex-shrink: 0; filter: drop-shadow(0 2px 4px rgba(0,0,0,.18)); }
+        .bday-emoji-sm { font-size: 22px; flex-shrink: 0; }
+        .bday-names-today    { font-size: 15px; font-weight: 700; color: #fff; line-height: 1.4; }
+        .bday-sub-today      { font-size: 12px; color: rgba(255,255,255,.78); margin-top: 2px; }
+        .bday-names-tomorrow { font-size: 14px; font-weight: 600; color: var(--tx-primary); line-height: 1.4; }
+        .bday-sub-tomorrow   { font-size: 12px; color: var(--tx-tertiary); margin-top: 2px; }
+        .bday-pill {
+          margin-left: auto; flex-shrink: 0;
+          font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+          padding: 4px 10px; border-radius: 20px;
+          background: rgba(255,255,255,.22); color: #fff;
+        }
+        .bday-pill-tomorrow {
+          margin-left: auto; flex-shrink: 0;
+          font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+          padding: 4px 10px; border-radius: 20px;
+          background: rgba(124,58,237,.14); color: var(--accent);
+        }
+        .bday-row-highlight { background: linear-gradient(90deg, rgba(124,58,237,.06) 0%, transparent 100%) !important; }
+      `}</style>
+
+      {/* ── Birthday Banners ─────────────────────────────────── */}
+      {todayBirthdays.length > 0 && (
+        <div className="bday-banner-today anim-up">
+          <span className="bday-emoji">🎂</span>
+          <div>
+            <p className="bday-names-today">
+              🎉 Happy Birthday,{" "}
+              {todayBirthdays.map((b, i) => (
+                <span key={b.name}>{b.name}{i < todayBirthdays.length - 1 ? " & " : ""}</span>
+              ))}!
+            </p>
+            <p className="bday-sub-today">
+              Wishing {todayBirthdays.length === 1 ? "them" : "them all"} a wonderful day 🎈
+            </p>
+          </div>
+          <span className="bday-pill">Today 🎊</span>
+        </div>
+      )}
+
+      {tomorrowBirthdays.length > 0 && (
+        <div className="bday-banner-tomorrow anim-up">
+          <span className="bday-emoji-sm">🎁</span>
+          <div>
+            <p className="bday-names-tomorrow">
+              {tomorrowBirthdays.map((b, i) => (
+                <span key={b.name}>{b.name}{i < tomorrowBirthdays.length - 1 ? " & " : ""}</span>
+              ))}
+              {tomorrowBirthdays.length === 1 ? "'s" : "'"} birthday is tomorrow!
+            </p>
+            <p className="bday-sub-tomorrow">Don't forget to wish them 🎈</p>
+          </div>
+          <span className="bday-pill-tomorrow">Tomorrow</span>
+        </div>
+      )}
+
+      {/* ── Header ───────────────────────────────────────────── */}
       <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:24 }} className="anim-up">
         <div>
           <h1 className="page-title">Employees</h1>
@@ -128,7 +271,7 @@ export default function EmployeesPage() {
         </button>
       </div>
 
-      {/* Filters */}
+      {/* ── Filters ──────────────────────────────────────────── */}
       <div style={{ display:"flex", gap:8, marginBottom:16 }}>
         <div className="search-wrap" style={{ flex:1, maxWidth:280 }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -140,7 +283,7 @@ export default function EmployeesPage() {
         </select>
       </div>
 
-      {/* Table */}
+      {/* ── Table ────────────────────────────────────────────── */}
       <div className="card" style={{ overflow:"hidden" }}>
         {loading ? (
           <div className="empty"><div className="spinner" /></div>
@@ -157,18 +300,36 @@ export default function EmployeesPage() {
             </thead>
             <tbody>
               {employees.map(emp => {
-                const done = emp.tasks.filter(t => t.status === "COMPLETED").length;
+                const done    = emp.tasks.filter(t => t.status === "COMPLETED").length;
+                const bdayStatus = getBirthdayStatus(emp.name);
+
                 return (
-                  <tr key={emp.id}>
+                  <tr
+                    key={emp.id}
+                    className={bdayStatus === "today" ? "bday-row-highlight" : undefined}
+                  >
                     <td>
                       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                        <div className="avatar">{emp.name.split(" ").map(n=>n[0]).join("").toUpperCase().slice(0,2)}</div>
+                        <div
+                          className="avatar"
+                          style={bdayStatus === "today"
+                            ? { background:"linear-gradient(135deg,#7c3aed,#ec4899)", color:"#fff" }
+                            : undefined}
+                        >
+                          {emp.name.split(" ").map(n=>n[0]).join("").toUpperCase().slice(0,2)}
+                        </div>
                         <div>
                           <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                            <Link href={`/dashboard/employees/${emp.id}`} style={{ fontSize:13.5, fontWeight:500, color:"var(--tx-primary)", textDecoration:"none" }}
-                              onMouseEnter={e=>(e.currentTarget.style.color="var(--accent)")} onMouseLeave={e=>(e.currentTarget.style.color="var(--tx-primary)")}>
+                            <Link
+                              href={`/dashboard/employees/${emp.id}`}
+                              style={{ fontSize:13.5, fontWeight:500, color:"var(--tx-primary)", textDecoration:"none" }}
+                              onMouseEnter={e=>(e.currentTarget.style.color="var(--accent)")}
+                              onMouseLeave={e=>(e.currentTarget.style.color="var(--tx-primary)")}
+                            >
                               {emp.name}
                             </Link>
+                            {bdayStatus === "today"    && <span style={{ fontSize:14, lineHeight:1 }}>🎂</span>}
+                            {bdayStatus === "tomorrow" && <span style={{ fontSize:13, lineHeight:1 }}>🎁</span>}
                             {emp.portalEnabled && <span className="badge badge-blue" style={{ fontSize:10 }}>Portal</span>}
                           </div>
                           <p style={{ fontSize:12, color:"var(--tx-tertiary)" }}>{emp.email}</p>
