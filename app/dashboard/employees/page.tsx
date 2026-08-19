@@ -17,7 +17,7 @@ const EMPLOYEE_BIRTHDAYS: Record<string, string> = {
   "Ayan Pakhira":          "19/07/1995",
   "Ashutosh Bhaskar":      "31/03/1997",
   "Arindam Biswas":        "28/10/2003",
-  "Ritik Singh":           "20/08/2001",
+  "Ritik Singh":           "16/09/2001",
   "Riya Kashyap":          "09/05/1999",
   "Ashlesha Kadwey":       "15/06/2002",
   "Pankaj Chandrawanshi":  "25/01/2000",
