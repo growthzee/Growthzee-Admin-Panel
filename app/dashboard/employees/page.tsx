@@ -89,12 +89,6 @@ function Modal({ emp, onClose, onSave }: { emp?: Employee|null; onClose:()=>void
     } catch(err: unknown) { setError(err instanceof Error ? err.message : "Error"); }
     finally { setLoading(false); }
   }
-  const Field = ({ k, l, req, type="text" }: { k: keyof typeof f; l: string; req?: boolean; type?: string }) => (
-    <div>
-      <label style={{ display:"block", fontSize:12.5, fontWeight:500, color:"var(--tx-secondary)", marginBottom:5 }}>{l}</label>
-      <input className="input" type={type} required={req} value={f[k]} onChange={e => setF({...f,[k]:e.target.value})} placeholder={l.replace(" *","")} />
-    </div>
-  );
   return (
     <div className="modal-backdrop anim-in">
       <div className="modal anim-scale">
@@ -106,22 +100,34 @@ function Modal({ emp, onClose, onSave }: { emp?: Employee|null; onClose:()=>void
           {error && <div style={{ padding:"8px 12px", background:"var(--red-bg)", borderRadius:"var(--r-md)", color:"var(--red)", fontSize:13, marginBottom:14 }}>{error}</div>}
           <form onSubmit={submit} style={{ display:"flex", flexDirection:"column", gap:12 }}>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-              <div style={{ gridColumn:"1/-1" }}><Field k="name" l="Full name" req /></div>
-              <div style={{ gridColumn:"1/-1" }}><Field k="email" l="Email" req type="email" /></div>
-              <Field k="phone" l="Phone" />
+              <div style={{ gridColumn:"1/-1" }}>
+                <label className="label" style={{ marginBottom:5 }}>Full name *</label>
+                <input className="input" required value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Full name" />
+              </div>
+              <div style={{ gridColumn:"1/-1" }}>
+                <label className="label" style={{ marginBottom:5 }}>Email *</label>
+                <input className="input" type="email" required value={f.email} onChange={e => setF({ ...f, email: e.target.value })} placeholder="Email" />
+              </div>
               <div>
-                <label style={{ display:"block", fontSize:12.5, fontWeight:500, color:"var(--tx-secondary)", marginBottom:5 }}>Status</label>
+                <label className="label" style={{ marginBottom:5 }}>Phone</label>
+                <input className="input" value={f.phone} onChange={e => setF({ ...f, phone: e.target.value })} placeholder="Phone" />
+              </div>
+              <div>
+                <label className="label" style={{ marginBottom:5 }}>Status</label>
                 <select className="input" value={f.status} onChange={e => setF({...f, status:e.target.value})}>
                   {STATUSES.map(s => <option key={s} value={s}>{s.replace("_"," ")}</option>)}
                 </select>
               </div>
               <div>
-                <label style={{ display:"block", fontSize:12.5, fontWeight:500, color:"var(--tx-secondary)", marginBottom:5 }}>Department *</label>
+                <label className="label" style={{ marginBottom:5 }}>Department *</label>
                 <select className="input" required value={f.department} onChange={e => setF({...f, department:e.target.value})}>
                   {DEPTS.map(d => <option key={d} value={d}>{d}</option>)}
                 </select>
               </div>
-              <Field k="position" l="Position" req />
+              <div>
+                <label className="label" style={{ marginBottom:5 }}>Position *</label>
+                <input className="input" required value={f.position} onChange={e => setF({ ...f, position: e.target.value })} placeholder="Position" />
+              </div>
             </div>
             <div style={{ display:"flex", gap:8, marginTop:4 }}>
               <button type="button" className="btn btn-secondary" style={{ flex:1 }} onClick={onClose}>Cancel</button>

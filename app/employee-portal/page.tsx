@@ -4,12 +4,19 @@ import { useRouter } from "next/navigation";
 import { formatDate } from "@/lib/utils";
 import TaskCategoryBadge from "@/components/TaskCategoryBadge";
 import { LEAVE_REASONS, LEAVE_STATUS_BADGE, LEAVE_STATUS_LABEL, reasonEmoji, reasonLabel } from "@/lib/leave";
+import { WORK_LINK_TYPES, detectLinkType, hostOf, isValidUrl, linkTypeEmoji, linkTypeLabel } from "@/lib/workLinks";
 
 type LeaveRequest = {
   id: string; reason: string; startDate: string; endDate: string; days: number;
   note?: string | null; status: string; reviewNote?: string | null;
   reviewedBy?: string | null; reviewedAt?: string | null; createdAt: string;
 };
+
+type WorkLink = {
+  id: string; title: string; url: string; linkType: string; note?: string | null; createdAt: string;
+  client: { id: string; name: string; company?: string };
+};
+type ClientOption = { id: string; name: string; company?: string };
 
 type ITask = { id: string; title: string; description?: string; category?: string | null; subCategory?: string | null; taskType?: string | null; status: string; priority: string; startDate: string; endDate: string; completedAt?: string; createdAt: string; _type: "internal" };
 type CTask = { id: string; title: string; description?: string; category?: string | null; subCategory?: string | null; taskType?: string | null; status: string; priority: string; startDate: string; endDate: string; completedAt?: string; createdAt: string; _type: "client"; client: { id: string; name: string; company?: string } };
@@ -493,13 +500,225 @@ function LeavePanel({ requests, onRequest }: { requests: LeaveRequest[]; onReque
   );
 }
 
+/** Derive a readable title from a pasted URL so the field isn't left blank */
+function guessTitle(url: string) {
+  try {
+    const u = new URL(url.trim());
+    const last = u.pathname.split("/").filter(Boolean).pop() || "";
+    const cleaned = decodeURIComponent(last).replace(/[-_+]/g, " ").replace(/\.[a-z0-9]{2,4}$/i, "").trim();
+    // Google file IDs are long opaque strings — not useful as a title
+    if (!cleaned || cleaned.length > 40 || /^[a-z0-9_-]{20,}$/i.test(cleaned)) {
+      return hostOf(url).split(".")[0].replace(/^\w/, (c) => c.toUpperCase()) + " link";
+    }
+    return cleaned.replace(/^\w/, (c) => c.toUpperCase());
+  } catch {
+    return "";
+  }
+}
+
+function WorkLinksPanel({ links, clients, onSubmitted }: {
+  links: WorkLink[];
+  clients: ClientOption[];
+  onSubmitted: () => void;
+}) {
+  const [clientId, setClientId] = useState("");
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
+  const [linkType, setLinkType] = useState<string>("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [ok, setOk] = useState(false);
+
+  // Follow the URL unless the employee has explicitly overridden the type
+  const effectiveType = linkType || (url ? detectLinkType(url) : "OTHER");
+  const urlLooksValid = !url || isValidUrl(url);
+
+  // Select the first client once the list arrives
+  useEffect(() => {
+    if (!clientId && clients.length > 0) setClientId(clients[0].id);
+  }, [clients, clientId]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(""); setSaving(true);
+    try {
+      const res = await fetch("/api/employee-portal/work-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, title, url, linkType: effectiveType, note }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Failed to submit");
+      setTitle(""); setUrl(""); setNote(""); setLinkType("");
+      setOk(true); setTimeout(() => setOk(false), 3000);
+      onSubmitted();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally { setSaving(false); }
+  }
+
+  async function remove(id: string) {
+    await fetch(`/api/employee-portal/work-links?id=${id}`, { method: "DELETE" });
+    onSubmitted();
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 16, alignItems: "start" }}>
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div style={{ padding: "13px 16px", borderBottom: "1px solid var(--border)" }}>
+          <p className="section-title">My submitted work</p>
+          <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 2 }}>
+            {links.length} link{links.length === 1 ? "" : "s"} shared with the team
+          </p>
+        </div>
+
+        {links.length === 0 ? (
+          <div className="empty" style={{ padding: 50 }}>
+            <p style={{ fontSize: 22, marginBottom: 6 }}>🔗</p>
+            <p style={{ fontWeight: 600, color: "var(--tx-secondary)" }}>No work submitted yet</p>
+            <p style={{ fontSize: 13 }}>Share a Drive, Doc, Sheet or PDF link for a client</p>
+          </div>
+        ) : links.map((l) => (
+          <div key={l.id} style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "11px 16px", borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontSize: 17, marginTop: 1 }}>{linkTypeEmoji(l.linkType)}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                <a href={l.url} target="_blank" rel="noreferrer"
+                  style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)", textDecoration: "none" }}>
+                  {l.title}
+                </a>
+                <span className="badge badge-gray">{linkTypeLabel(l.linkType)}</span>
+                <span className="badge badge-purple">{l.client.company || l.client.name}</span>
+              </div>
+              <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {hostOf(l.url)} · submitted {formatDate(l.createdAt)}
+              </p>
+              {l.note && <p style={{ fontSize: 12, color: "var(--tx-secondary)", marginTop: 4 }}>{l.note}</p>}
+            </div>
+            <button className="btn-ghost btn-icon" title="Remove" onClick={() => remove(l.id)} style={{ flexShrink: 0 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6M9 6V4h6v2" /></svg>
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="card" style={{ padding: 18 }}>
+        <p className="section-title" style={{ marginBottom: 3 }}>Submit a work link</p>
+        <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginBottom: 13 }}>
+          Paste any Drive, Doc, Sheet, PDF or other URL
+        </p>
+
+        {error && (
+          <div style={{ padding: "8px 11px", background: "var(--red-bg)", borderRadius: "var(--r-md)", color: "var(--red)", fontSize: 12.5, marginBottom: 12 }}>{error}</div>
+        )}
+        {ok && (
+          <div style={{ padding: "8px 11px", background: "var(--green-bg)", borderRadius: "var(--r-md)", color: "var(--green)", fontSize: 12.5, marginBottom: 12 }}>
+            ✓ Submitted — your manager can see it now
+          </div>
+        )}
+
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+          {/* Paste field first — it's the main action */}
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Paste link *</label>
+            <div style={{ display: "flex", gap: 5 }}>
+              <input
+                className="input"
+                required
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onPaste={(e) => {
+                  // Auto-fill an empty title from the pasted URL's file name
+                  const pasted = e.clipboardData.getData("text");
+                  if (pasted && !title.trim()) setTitle(guessTitle(pasted));
+                }}
+                placeholder="https://drive.google.com/…"
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary"
+                title="Paste from clipboard"
+                style={{ flexShrink: 0, padding: "0 10px" }}
+                onClick={async () => {
+                  try {
+                    const text = (await navigator.clipboard.readText()).trim();
+                    if (text) {
+                      setUrl(text);
+                      if (!title.trim()) setTitle(guessTitle(text));
+                    }
+                  } catch {
+                    setError("Clipboard blocked by your browser — paste with Ctrl+V instead");
+                  }
+                }}
+              >
+                Paste
+              </button>
+            </div>
+            {!urlLooksValid && (
+              <p style={{ fontSize: 11.5, color: "var(--red)", marginTop: 4 }}>Must start with http:// or https://</p>
+            )}
+            {url && urlLooksValid && (
+              <p style={{ fontSize: 11.5, color: "var(--green)", marginTop: 4 }}>
+                {linkTypeEmoji(effectiveType)} Detected as {linkTypeLabel(effectiveType)} · {hostOf(url)}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Title *</label>
+            <input className="input" required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. August creatives folder" />
+          </div>
+
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Client *</label>
+            {clients.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>Loading clients…</p>
+            ) : (
+              <select className="input" required value={clientId} onChange={(e) => setClientId(e.target.value)}>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.company || c.name}</option>)}
+              </select>
+            )}
+          </div>
+
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>
+              Type {!linkType && url && <span style={{ color: "var(--tx-tertiary)", fontWeight: 400 }}>· auto-detected</span>}
+            </label>
+            <select className="input" value={effectiveType} onChange={(e) => setLinkType(e.target.value)}>
+              {WORK_LINK_TYPES.map((t) => <option key={t.value} value={t.value}>{t.emoji} {t.label}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Note</label>
+            <textarea className="input" value={note} onChange={(e) => setNote(e.target.value)} rows={2} style={{ minHeight: 54 }} placeholder="Anything the team should know (optional)" />
+          </div>
+
+          <button type="submit" className="btn btn-primary" disabled={saving || !urlLooksValid || !clientId}>
+            {saving && <span className="spinner" style={{ width: 12, height: 12, borderTopColor: "rgba(255,255,255,0.7)" }} />}
+            {saving ? "Submitting…" : "Submit link"}
+          </button>
+        </form>
+
+        <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 10, lineHeight: 1.5 }}>
+          Submitted links appear on the client&apos;s Work URLs tab in the admin dashboard.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function EmployeePortalPage() {
   const router = useRouter();
   const [employee, setEmployee] = useState<Employee | null>(null);
+  const [workLinks, setWorkLinks] = useState<WorkLink[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [leaveModal, setLeaveModal] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"tasks" | "leave">("tasks");
+  const [view, setView] = useState<"tasks" | "leave" | "links">("tasks");
   const [tab, setTab] = useState<"all" | "internal" | "client">("all");
   const [sf, setSf] = useState("");
   const [search, setSearch] = useState("");
@@ -519,7 +738,23 @@ export default function EmployeePortalPage() {
     } catch { setLeaves([]); }
   }, []);
 
-  useEffect(() => { load(); loadLeaves(); }, [load, loadLeaves]);
+  const loadWorkLinks = useCallback(async () => {
+    try {
+      const r = await fetch("/api/employee-portal/work-links");
+      const d = await r.json();
+      setWorkLinks(Array.isArray(d) ? d : []);
+    } catch { setWorkLinks([]); }
+  }, []);
+
+  const loadClients = useCallback(async () => {
+    try {
+      const r = await fetch("/api/employee-portal/clients");
+      const d = await r.json();
+      setClients(Array.isArray(d) ? d : []);
+    } catch { setClients([]); }
+  }, []);
+
+  useEffect(() => { load(); loadLeaves(); loadWorkLinks(); loadClients(); }, [load, loadLeaves, loadWorkLinks, loadClients]);
 
   async function updateTask(id: string, status: string, type: string) {
     await fetch(`/api/employee-portal/tasks/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, type }) });
@@ -566,6 +801,15 @@ export default function EmployeePortalPage() {
   const dueToday = all.filter((t) => t.status !== "COMPLETED" && new Date(t.endDate) >= startOfToday && new Date(t.endDate) <= endOfToday).length;
   const pendingLeaves = leaves.filter((l) => l.status === "PENDING").length;
   const approvedLeaveDays = leaves.filter((l) => l.status === "APPROVED").reduce((s, l) => s + l.days, 0);
+
+  // Clients the employee already has work for, surfaced first in the picker
+  const assignedIds = new Set(employee.clientTasks.filter((t) => t.client).map((t) => t.client.id));
+  const clientOptions: ClientOption[] = [...clients].sort((a, b) => {
+    const aAssigned = assignedIds.has(a.id) ? 0 : 1;
+    const bAssigned = assignedIds.has(b.id) ? 0 : 1;
+    if (aAssigned !== bAssigned) return aAssigned - bAssigned;
+    return (a.company || a.name).localeCompare(b.company || b.name);
+  });
 
   const STAT_CARDS = [
     { label: "Total Tasks", val: all.length, sub: `${internal.length} internal · ${client.length} client`, bg: "var(--purple-bg)", icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 12l2 2 4-4" /></svg> },
@@ -625,7 +869,11 @@ export default function EmployeePortalPage() {
 
         {/* ── View switcher ────────────────────────────────────────── */}
         <div className="filter-tabs-wrap anim-up" style={{ marginBottom: 16 }}>
-          {([["tasks", "My tasks", all.length], ["leave", "Leave", leaves.length]] as const).map(([k, l, c]) => (
+          {([
+            ["tasks", "My tasks", all.length],
+            ["links", "Work links", workLinks.length],
+            ["leave", "Leave", leaves.length],
+          ] as const).map(([k, l, c]) => (
             <button key={k} className={`filter-tab${view === k ? " active" : ""}`} onClick={() => setView(k)}>
               {l} <span className="count">{c}</span>
             </button>
@@ -670,6 +918,13 @@ export default function EmployeePortalPage() {
             ))}
           </div>
         </div>
+
+        {/* ── Work links view ──────────────────────────────────────── */}
+        {view === "links" && (
+          <div className="tab-fade">
+            <WorkLinksPanel links={workLinks} clients={clientOptions} onSubmitted={loadWorkLinks} />
+          </div>
+        )}
 
         {/* ── Leave view ───────────────────────────────────────────── */}
         {view === "leave" && (

@@ -12,6 +12,7 @@ import {
   INVOICE_STATUS_BADGE,
   INVOICE_STATUS_LABEL,
 } from "@/lib/billing";
+import { hostOf, linkTypeEmoji, linkTypeLabel } from "@/lib/workLinks";
 
 type Employee = {
   id: string;
@@ -646,10 +647,138 @@ function PortalSettings({
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "tasks", label: "Tasks" },
+  { key: "workUrls", label: "Work URLs" },
   { key: "targets", label: "Targets" },
   { key: "invoices", label: "Invoices" },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
+
+type WorkLink = {
+  id: string; title: string; url: string; linkType: string; note?: string | null; createdAt: string;
+  employee?: { id: string; name: string; department: string; position: string } | null;
+};
+
+/** Deliverable URLs submitted by employees from their portal */
+function WorkUrlsTab({ clientId }: { clientId: string }) {
+  const [links, setLinks] = useState<WorkLink[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [typeFilter, setTypeFilter] = useState("All");
+  const [search, setSearch] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await fetch(`/api/work-links?clientId=${clientId}`);
+    const d = await res.json();
+    setLinks(Array.isArray(d) ? d : []);
+    setLoading(false);
+  }, [clientId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function remove(id: string) {
+    await fetch(`/api/work-links/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  const typesPresent = Array.from(new Set(links.map((l) => l.linkType)));
+  const q = search.trim().toLowerCase();
+  const filtered = links.filter((l) => {
+    if (typeFilter !== "All" && l.linkType !== typeFilter) return false;
+    if (q) {
+      const hay = [l.title, l.note, l.url, l.employee?.name].filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  return (
+    <div className="card tab-fade" style={{ overflow: "hidden" }}>
+      <div style={{ padding: "13px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ marginRight: "auto" }}>
+          <p className="section-title">Work URLs ({filtered.length})</p>
+          <p style={{ fontSize: 12, color: "var(--tx-tertiary)", marginTop: 2 }}>
+            Drive, Docs, Sheets and PDFs submitted by the team for this client
+          </p>
+        </div>
+        {typesPresent.length > 1 && (
+          <div className="filter-tabs-wrap">
+            <button className={`filter-tab${typeFilter === "All" ? " active" : ""}`} onClick={() => setTypeFilter("All")}>
+              All <span className="count">{links.length}</span>
+            </button>
+            {typesPresent.map((t) => (
+              <button key={t} className={`filter-tab${typeFilter === t ? " active" : ""}`} onClick={() => setTypeFilter(t)}>
+                {linkTypeEmoji(t)} {linkTypeLabel(t)}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="search-wrap" style={{ maxWidth: 190 }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+          <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search links…" />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="empty" style={{ padding: 50 }}><div className="spinner" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="empty" style={{ padding: 60 }}>
+          <p style={{ fontSize: 24, marginBottom: 8 }}>🔗</p>
+          <p style={{ fontWeight: 600, color: "var(--tx-secondary)" }}>
+            {links.length === 0 ? "No work links submitted yet" : "No links match your search"}
+          </p>
+          <p style={{ fontSize: 13 }}>
+            {links.length === 0
+              ? "Employees submit these from their portal under “Work links”"
+              : "Try a different type or search term"}
+          </p>
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table">
+            <thead>
+              <tr><th>Deliverable</th><th>Type</th><th>Submitted by</th><th>Submitted</th><th></th></tr>
+            </thead>
+            <tbody>
+              {filtered.map((l) => (
+                <tr key={l.id} onClick={() => window.open(l.url, "_blank")} title="Open link">
+                  <td style={{ maxWidth: 300 }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, color: "var(--tx-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {linkTypeEmoji(l.linkType)} {l.title}
+                    </p>
+                    <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {hostOf(l.url)}{l.note ? ` · ${l.note}` : ""}
+                    </p>
+                  </td>
+                  <td><span className="badge badge-purple">{linkTypeLabel(l.linkType)}</span></td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {l.employee ? (
+                      <Link href={`/dashboard/employees/${l.employee.id}`} style={{ display: "flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+                        <div className="avatar" style={{ width: 22, height: 22, fontSize: 9 }}>
+                          {l.employee.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)}
+                        </div>
+                        <span style={{ fontSize: 12.5, color: "var(--tx-secondary)", whiteSpace: "nowrap" }}>{l.employee.name}</span>
+                      </Link>
+                    ) : <span style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>—</span>}
+                  </td>
+                  <td style={{ fontSize: 12.5, color: "var(--tx-tertiary)", whiteSpace: "nowrap" }}>{formatDate(l.createdAt)}</td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+                      <a href={l.url} target="_blank" rel="noreferrer" className="btn-ghost btn-icon" title="Open link">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+                      </a>
+                      <button className="btn-ghost btn-icon" title="Remove" onClick={() => remove(l.id)}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6M9 6V4h6v2" /></svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 type MonthlyTarget = { id: string; year: number; month: number; target: number; note?: string | null };
 type InvoiceItem = { id: string; description: string; quantity: number; unitPrice: number };
@@ -1405,6 +1534,8 @@ export default function ClientDetailPage() {
           )}
         </div>
       )}
+
+      {tab === "workUrls" && <WorkUrlsTab clientId={id} />}
 
       {tab === "targets" && <TargetsTab clientId={id} tasks={tasks} />}
 

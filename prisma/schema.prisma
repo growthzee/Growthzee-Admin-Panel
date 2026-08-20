@@ -37,6 +37,7 @@ model Employee {
   clientTasks    ClientTask[]
   attendance     Attendance[]
   leaveRequests  LeaveRequest[]
+  workLinks      WorkLink[]
 }
 
 model Task {
@@ -70,6 +71,36 @@ model Client {
   clientTasks    ClientTask[]
   monthlyTargets MonthlyTarget[]
   invoices       Invoice[]
+  workLinks      WorkLink[]
+}
+
+/// A deliverable URL (Drive / Doc / Sheet / PDF / other) submitted by an employee for a client
+model WorkLink {
+  id          String       @id @default(cuid())
+  clientId    String
+  client      Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  employeeId  String?
+  employee    Employee?    @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  title       String
+  url         String
+  linkType    WorkLinkType @default(OTHER)
+  note        String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([clientId])
+  @@index([employeeId])
+}
+
+enum WorkLinkType {
+  DRIVE
+  DOC
+  SHEET
+  SLIDE
+  PDF
+  DESIGN
+  VIDEO
+  OTHER
 }
 
 /// Per-client delivery quota for a given month, set by an admin
