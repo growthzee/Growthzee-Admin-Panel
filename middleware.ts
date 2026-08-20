@@ -116,7 +116,9 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/api/clients") ||
     pathname.startsWith("/api/client-tasks") ||
     pathname.startsWith("/api/attendance") ||
-    pathname.startsWith("/api/leave-requests")
+    pathname.startsWith("/api/leave-requests") ||
+    pathname.startsWith("/api/invoices") ||
+    pathname.startsWith("/api/monthly-targets")
   ) {
     if (!adminToken) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (!await verifyToken(adminToken)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

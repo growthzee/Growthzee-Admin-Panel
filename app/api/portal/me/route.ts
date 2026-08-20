@@ -25,6 +25,14 @@ export async function GET(request: NextRequest) {
           },
           orderBy: { createdAt: "desc" },
         },
+        monthlyTargets: {
+          orderBy: [{ year: "desc" }, { month: "desc" }],
+        },
+        invoices: {
+          where: { status: { not: "DRAFT" } },
+          include: { items: true },
+          orderBy: { issueDate: "desc" },
+        },
       },
     });
 

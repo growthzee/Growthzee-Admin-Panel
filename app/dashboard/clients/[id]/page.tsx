@@ -5,6 +5,13 @@ import Link from "next/link";
 import { formatDate } from "@/lib/utils";
 import TaskCategoryPicker from "@/components/TaskCategoryPicker";
 import TaskCategoryBadge from "@/components/TaskCategoryBadge";
+import {
+  MONTHS as BILLING_MONTHS,
+  money,
+  invoiceTotals,
+  INVOICE_STATUS_BADGE,
+  INVOICE_STATUS_LABEL,
+} from "@/lib/billing";
 
 type Employee = {
   id: string;
@@ -639,11 +646,403 @@ function PortalSettings({
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "tasks", label: "Tasks" },
-  { key: "files", label: "Files" },
-  { key: "reports", label: "Reports" },
+  { key: "targets", label: "Targets" },
   { key: "invoices", label: "Invoices" },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
+
+type MonthlyTarget = { id: string; year: number; month: number; target: number; note?: string | null };
+type InvoiceItem = { id: string; description: string; quantity: number; unitPrice: number };
+type Invoice = {
+  id: string; number: string; issueDate: string; dueDate?: string | null;
+  periodYear?: number | null; periodMonth?: number | null; currency: string;
+  taxPercent: number; notes?: string | null; status: string; items: InvoiceItem[];
+};
+
+/** Set / update the monthly delivery quota for this client */
+function TargetsTab({ clientId, tasks }: { clientId: string; tasks: ClientTask[] }) {
+  const now = new Date();
+  const [targets, setTargets] = useState<MonthlyTarget[]>([]);
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [value, setValue] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/monthly-targets?clientId=${clientId}`);
+    const d = await res.json();
+    setTargets(Array.isArray(d) ? d : []);
+  }, [clientId]);
+  useEffect(() => { load(); }, [load]);
+
+  // Prefill the input when the selected month already has a target
+  useEffect(() => {
+    const existing = targets.find((t) => t.year === year && t.month === month);
+    setValue(existing ? String(existing.target) : "");
+    setNote(existing?.note || "");
+  }, [targets, year, month]);
+
+  /** Deliveries = client tasks completed within that month */
+  function deliveredIn(y: number, m: number) {
+    return tasks.filter((t) => {
+      if (!t.completedAt) return false;
+      const d = new Date(t.completedAt);
+      return d.getFullYear() === y && d.getMonth() + 1 === m;
+    }).length;
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setError(""); setSaving(true);
+    try {
+      const res = await fetch("/api/monthly-targets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, year, month, target: Number(value) || 0, note }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Failed to save");
+      await load();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally { setSaving(false); }
+  }
+
+  const yearOptions = Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i);
+
+  return (
+    <div className="tab-fade" style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 16, alignItems: "start" }}>
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid var(--border)" }}>
+          <p className="section-title">Monthly delivery targets</p>
+          <p style={{ fontSize: 12, color: "var(--tx-tertiary)", marginTop: 2 }}>
+            Deliveries counted from tasks completed in each month
+          </p>
+        </div>
+        {targets.length === 0 ? (
+          <div className="empty" style={{ padding: 50 }}>
+            <p style={{ fontSize: 22, marginBottom: 6 }}>🎯</p>
+            <p style={{ fontWeight: 600, color: "var(--tx-secondary)" }}>No targets set yet</p>
+            <p style={{ fontSize: 13 }}>Set a monthly quota so the client can track progress</p>
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr><th>Month</th><th>Target</th><th>Delivered</th><th>Progress</th></tr>
+            </thead>
+            <tbody>
+              {targets.map((t) => {
+                const delivered = deliveredIn(t.year, t.month);
+                const pct = t.target > 0 ? Math.min(100, Math.round((delivered / t.target) * 100)) : 0;
+                const col = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
+                return (
+                  <tr key={t.id} onClick={() => { setYear(t.year); setMonth(t.month); }} title="Edit this month">
+                    <td style={{ fontSize: 13, fontWeight: 500, color: "var(--tx-primary)" }}>
+                      {BILLING_MONTHS[t.month - 1]} {t.year}
+                      {t.note && <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", fontWeight: 400 }}>{t.note}</p>}
+                    </td>
+                    <td><span className="badge badge-purple">{t.target}</span></td>
+                    <td style={{ fontSize: 13, fontWeight: 600, color: "var(--tx-primary)" }}>{delivered}</td>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div className="mini-progress-track"><div className="mini-progress-fill" style={{ width: `${pct}%`, background: col }} /></div>
+                        <span style={{ fontSize: 12.5, fontWeight: 600, color: col }}>{pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card" style={{ padding: 18 }}>
+        <p className="section-title" style={{ marginBottom: 12 }}>Set a monthly target</p>
+        {error && (
+          <div style={{ padding: "8px 11px", background: "var(--red-bg)", borderRadius: "var(--r-md)", color: "var(--red)", fontSize: 12.5, marginBottom: 12 }}>{error}</div>
+        )}
+        <form onSubmit={save} style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Month</label>
+              <select className="input" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+                {BILLING_MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Year</label>
+              <select className="input" value={year} onChange={(e) => setYear(Number(e.target.value))}>
+                {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Total deliveries expected *</label>
+            <input className="input" type="number" min={0} required value={value}
+              onChange={(e) => setValue(e.target.value)} placeholder="e.g. 20" />
+          </div>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Note (optional)</label>
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. 12 creatives + 8 reels" />
+          </div>
+          <button type="submit" className="btn btn-primary" disabled={saving}>
+            {saving && <span className="spinner" style={{ width: 12, height: 12, borderTopColor: "rgba(255,255,255,0.7)" }} />}
+            Save target
+          </button>
+        </form>
+        <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 10, lineHeight: 1.5 }}>
+          The client sees this as a progress bar in their portal for the selected month.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Raise and manage invoices for this client */
+function InvoicesTab({ clientId }: { clientId: string }) {
+  const now = new Date();
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await fetch(`/api/invoices?clientId=${clientId}`);
+    const d = await res.json();
+    setInvoices(Array.isArray(d) ? d : []);
+    setLoading(false);
+  }, [clientId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function setStatus(id: string, status: string) {
+    await fetch(`/api/invoices/${id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
+    });
+    load();
+  }
+  async function remove(id: string) {
+    await fetch(`/api/invoices/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <div className="tab-fade" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div style={{ padding: "13px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ marginRight: "auto" }}>
+            <p className="section-title">Invoices</p>
+            <p style={{ fontSize: 12, color: "var(--tx-tertiary)", marginTop: 2 }}>
+              {invoices.length} raised · client sees these in their portal
+            </p>
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={() => setShowForm((s) => !s)}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            Raise invoice
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="empty" style={{ padding: 50 }}><div className="spinner" /></div>
+        ) : invoices.length === 0 ? (
+          <div className="empty" style={{ padding: 50 }}>
+            <p style={{ fontSize: 22, marginBottom: 6 }}>🧾</p>
+            <p style={{ fontWeight: 600, color: "var(--tx-secondary)" }}>No invoices yet</p>
+            <p style={{ fontSize: 13 }}>Raise one and it appears in the client portal instantly</p>
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr><th>Invoice</th><th>Invoice date</th><th>Period</th><th>Amount</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+              {invoices.map((inv) => {
+                const { total } = invoiceTotals(inv.items, inv.taxPercent);
+                return (
+                  <tr key={inv.id} onClick={() => window.open(`/invoice/${inv.id}`, "_blank")} title="Open printable invoice">
+                    <td style={{ fontSize: 13, fontWeight: 600, color: "var(--tx-primary)" }}>{inv.number}</td>
+                    <td style={{ fontSize: 12.5, color: "var(--tx-secondary)" }}>{formatDate(inv.issueDate)}</td>
+                    <td style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>
+                      {inv.periodMonth && inv.periodYear ? `${BILLING_MONTHS[inv.periodMonth - 1]} ${inv.periodYear}` : "—"}
+                    </td>
+                    <td style={{ fontSize: 13, fontWeight: 600, color: "var(--tx-primary)" }}>{money(total, inv.currency)}</td>
+                    <td><span className={`badge ${INVOICE_STATUS_BADGE[inv.status] || "badge-gray"}`}>{INVOICE_STATUS_LABEL[inv.status] || inv.status}</span></td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+                        <a href={`/invoice/${inv.id}`} target="_blank" rel="noreferrer" className="btn-ghost btn-icon" title="View / download PDF">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                        </a>
+                        {inv.status !== "PAID" && (
+                          <button className="btn-ghost btn-icon" title="Mark paid" onClick={() => setStatus(inv.id, "PAID")}>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                          </button>
+                        )}
+                        <button className="btn-ghost btn-icon" title="Delete" onClick={() => remove(inv.id)}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6M9 6V4h6v2" /></svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {showForm && (
+        <InvoiceForm
+          clientId={clientId}
+          defaultYear={now.getFullYear()}
+          defaultMonth={now.getMonth() + 1}
+          onClose={() => setShowForm(false)}
+          onSaved={() => { setShowForm(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function InvoiceForm({ clientId, defaultYear, defaultMonth, onClose, onSaved }: {
+  clientId: string; defaultYear: number; defaultMonth: number;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const today = new Date();
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const [issueDate, setIssueDate] = useState(iso(today));
+  const [dueDate, setDueDate] = useState("");
+  const [periodYear, setPeriodYear] = useState(defaultYear);
+  const [periodMonth, setPeriodMonth] = useState(defaultMonth);
+  const [currency, setCurrency] = useState("INR");
+  const [taxPercent, setTaxPercent] = useState("0");
+  const [notes, setNotes] = useState("");
+  const [items, setItems] = useState<{ description: string; quantity: string; unitPrice: string }[]>([
+    { description: "", quantity: "1", unitPrice: "" },
+  ]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const parsed = items.map((i) => ({ quantity: Number(i.quantity) || 0, unitPrice: Number(i.unitPrice) || 0 }));
+  const { subtotal, tax, total } = invoiceTotals(parsed, Number(taxPercent) || 0);
+
+  function updateItem(idx: number, field: "description" | "quantity" | "unitPrice", val: string) {
+    setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, [field]: val } : it)));
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(""); setSaving(true);
+    try {
+      const res = await fetch("/api/invoices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId, issueDate, dueDate: dueDate || null,
+          periodYear, periodMonth, currency,
+          taxPercent: Number(taxPercent) || 0, notes,
+          items: items
+            .filter((i) => i.description.trim())
+            .map((i) => ({ description: i.description, quantity: Number(i.quantity) || 1, unitPrice: Number(i.unitPrice) || 0 })),
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Failed to raise invoice");
+      onSaved();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error");
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="card" style={{ padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <p className="section-title">New invoice</p>
+        <button className="btn-ghost btn-icon" onClick={onClose}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ padding: "9px 12px", background: "var(--red-bg)", borderRadius: "var(--r-md)", color: "var(--red)", fontSize: 13, marginBottom: 14 }}>{error}</div>
+      )}
+
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Invoice date *</label>
+            <input className="input" type="date" required value={issueDate} onChange={(e) => setIssueDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Due date</label>
+            <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Currency</label>
+            <select className="input" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+              {["INR", "USD", "EUR", "GBP", "AED"].map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Billing month</label>
+            <select className="input" value={periodMonth} onChange={(e) => setPeriodMonth(Number(e.target.value))}>
+              {BILLING_MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Billing year</label>
+            <input className="input" type="number" value={periodYear} onChange={(e) => setPeriodYear(Number(e.target.value))} />
+          </div>
+          <div>
+            <label className="label" style={{ marginBottom: 5 }}>Tax %</label>
+            <input className="input" type="number" min={0} step="0.01" value={taxPercent} onChange={(e) => setTaxPercent(e.target.value)} />
+          </div>
+        </div>
+
+        <div>
+          <label className="label" style={{ marginBottom: 6 }}>Line items *</label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {items.map((item, idx) => (
+              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 80px 120px 30px", gap: 7 }}>
+                <input className="input" placeholder="Description" value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} />
+                <input className="input" type="number" min={0} step="0.01" placeholder="Qty" value={item.quantity} onChange={(e) => updateItem(idx, "quantity", e.target.value)} />
+                <input className="input" type="number" min={0} step="0.01" placeholder="Rate" value={item.unitPrice} onChange={(e) => updateItem(idx, "unitPrice", e.target.value)} />
+                <button type="button" className="btn btn-secondary" style={{ padding: 0 }} title="Remove line"
+                  onClick={() => setItems((cur) => (cur.length === 1 ? cur : cur.filter((_, i) => i !== idx)))}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: 8 }}
+            onClick={() => setItems((cur) => [...cur, { description: "", quantity: "1", unitPrice: "" }])}>
+            + Add line
+          </button>
+        </div>
+
+        <div>
+          <label className="label" style={{ marginBottom: 5 }}>Notes</label>
+          <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={{ minHeight: 56 }} placeholder="Payment terms, bank details…" />
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 22, padding: "10px 12px", background: "var(--hover-bg)", borderRadius: "var(--r-md)" }}>
+          <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Subtotal <strong style={{ color: "var(--tx-primary)" }}>{money(subtotal, currency)}</strong></span>
+          <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Tax <strong style={{ color: "var(--tx-primary)" }}>{money(tax, currency)}</strong></span>
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--accent)" }}>Total {money(total, currency)}</span>
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={saving}>
+            {saving && <span className="spinner" style={{ width: 13, height: 13, borderTopColor: "rgba(255,255,255,0.7)" }} />}
+            {saving ? "Raising…" : "Raise invoice"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function getCategoryEmojiLocal(label: string) {
   const map: Record<string, string> = {
@@ -1007,13 +1406,9 @@ export default function ClientDetailPage() {
         </div>
       )}
 
-      {(tab === "files" || tab === "reports" || tab === "invoices") && (
-        <div className="card empty anim-up" style={{ padding: 70 }}>
-          <p style={{ fontSize: 26, marginBottom: 8 }}>{tab === "files" ? "📁" : tab === "reports" ? "📄" : "🧾"}</p>
-          <p style={{ fontWeight: 600, color: "var(--tx-secondary)" }}>{TABS.find((t) => t.key === tab)?.label} coming soon</p>
-          <p style={{ fontSize: 13 }}>This section isn&apos;t wired up to data yet.</p>
-        </div>
-      )}
+      {tab === "targets" && <TargetsTab clientId={id} tasks={tasks} />}
+
+      {tab === "invoices" && <InvoicesTab clientId={id} />}
 
       {(taskModal === "add" || taskModal === "edit") && (
         <TaskModal

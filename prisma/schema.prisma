@@ -55,19 +55,75 @@ model Task {
 }
 
 model Client {
-  id            String       @id @default(cuid())
-  name          String
-  email         String       @unique
-  password      String?
-  phone         String?
-  company       String?
-  website       String?
-  notes         String?
-  status        ClientStatus @default(ACTIVE)
-  portalEnabled Boolean      @default(false)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-  clientTasks   ClientTask[]
+  id             String          @id @default(cuid())
+  name           String
+  email          String          @unique
+  password       String?
+  phone          String?
+  company        String?
+  website        String?
+  notes          String?
+  status         ClientStatus    @default(ACTIVE)
+  portalEnabled  Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  clientTasks    ClientTask[]
+  monthlyTargets MonthlyTarget[]
+  invoices       Invoice[]
+}
+
+/// Per-client delivery quota for a given month, set by an admin
+model MonthlyTarget {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  year      Int
+  month     Int
+  target    Int      @default(0)
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, year, month])
+  @@index([clientId])
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  clientId    String
+  client      Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  number      String        @unique
+  issueDate   DateTime      @db.Date
+  dueDate     DateTime?     @db.Date
+  periodYear  Int?
+  periodMonth Int?
+  currency    String        @default("INR")
+  taxPercent  Float         @default(0)
+  notes       String?
+  status      InvoiceStatus @default(RAISED)
+  items       InvoiceItem[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([clientId])
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Float   @default(1)
+  unitPrice   Float   @default(0)
+
+  @@index([invoiceId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  RAISED
+  PAID
+  CANCELLED
 }
 
 model ClientTask {
