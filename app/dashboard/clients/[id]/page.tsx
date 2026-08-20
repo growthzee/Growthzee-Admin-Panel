@@ -636,6 +636,25 @@ function PortalSettings({
   );
 }
 
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "tasks", label: "Tasks" },
+  { key: "files", label: "Files" },
+  { key: "reports", label: "Reports" },
+  { key: "invoices", label: "Invoices" },
+] as const;
+type TabKey = (typeof TABS)[number]["key"];
+
+function getCategoryEmojiLocal(label: string) {
+  const map: Record<string, string> = {
+    "Social Media Management": "📱", "Paid Ads (Performance Marketing)": "📢",
+    "Website / SEO": "🌐", "E-commerce Management": "🛒", "Client Management": "🤝",
+    "Reporting & Analysis": "📊", "Strategy & Planning": "🧠", "Video Production": "🎬",
+    "Automation / Tools": "🤖", "Uncategorized": "📋",
+  };
+  return map[label] || "📋";
+}
+
 export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -645,6 +664,8 @@ export default function ClientDetailPage() {
   const [taskModal, setTaskModal] = useState<"add" | "edit" | null>(null);
   const [selectedTask, setSelectedTask] = useState<ClientTask | null>(null);
   const [editClient, setEditClient] = useState(false);
+  const [tab, setTab] = useState<TabKey>("overview");
+  const [catFilter, setCatFilter] = useState<string>("All");
   const [cform, setCform] = useState({
     name: "",
     email: "",
@@ -729,7 +750,10 @@ export default function ClientDetailPage() {
   const tasks = client.clientTasks;
   const completed = tasks.filter((t) => t.status === "COMPLETED").length;
   const changes = tasks.filter((t) => t.status === "CHANGES_REQUIRED").length;
-  const overdue = tasks.filter((t) => t.status === "OVERDUE").length;
+  const now = new Date();
+  const overdue = tasks.filter(
+    (t) => t.status !== "COMPLETED" && new Date(t.endDate) < now,
+  ).length;
   const pending = tasks.filter(
     (t) => t.status === "PENDING" || t.status === "IN_PROGRESS",
   ).length;
@@ -737,8 +761,17 @@ export default function ClientDetailPage() {
     tasks.length > 0 ? Math.round((completed / tasks.length) * 100) : 0;
   const filtered = sf ? tasks.filter((t) => t.status === sf) : tasks;
 
+  // Category breakdown (checklist view + task table filter)
+  const catMap = new Map<string, ClientTask[]>();
+  for (const t of tasks) {
+    const key = t.category || "Uncategorized";
+    catMap.set(key, [...(catMap.get(key) || []), t]);
+  }
+  const categories = Array.from(catMap.entries()).sort((a, b) => b[1].length - a[1].length);
+  const tasksForTable = catFilter === "All" ? tasks : (catMap.get(catFilter) || []);
+
   return (
-    <div className="page-section">
+    <div className="page-section" style={{ maxWidth: 1180 }}>
       <div className="breadcrumb">
         <Link href="/dashboard/clients">Clients</Link>
         <span className="breadcrumb-sep">/</span>
@@ -747,570 +780,240 @@ export default function ClientDetailPage() {
         </span>
       </div>
 
-      <div
-        style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 20 }}
-      >
-        {/* Left sidebar */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="card" style={{ padding: 20 }}>
-            <div style={{ textAlign: "center", marginBottom: 16 }}>
-              <div
-                className="avatar avatar-lg"
-                style={{ margin: "0 auto 10px" }}
-              >
-                {client.name
-                  .split(" ")
-                  .map((n) => n[0])
-                  .join("")
-                  .toUpperCase()
-                  .slice(0, 2)}
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 16 }} className="anim-up">
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div className="avatar avatar-lg" style={{ background: "linear-gradient(135deg,#7c3aed,#ec4899)", color: "#fff" }}>
+            {client.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)}
+          </div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <h1 className="page-title" style={{ fontSize: 22 }}>{client.name}</h1>
+              <span className={`badge ${client.status === "ACTIVE" ? "badge-green" : client.status === "INACTIVE" ? "badge-red" : "badge-amber"}`}>{client.status}</span>
+              {client.portalEnabled && <span className="badge badge-blue">Portal enabled</span>}
+            </div>
+            {client.company && <p style={{ fontSize: 13, color: "var(--tx-tertiary)", marginTop: 3 }}>{client.company}</p>}
+          </div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={() => { setSelectedTask(null); setTaskModal("add"); }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+          New task
+        </button>
+      </div>
+
+      {/* ── Tabs ───────────────────────────────────────────────────── */}
+      <div className="filter-tabs-wrap anim-up" style={{ marginBottom: 20 }}>
+        {TABS.map((t) => (
+          <button key={t.key} className={`filter-tab${tab === t.key ? " active" : ""}`} onClick={() => setTab(t.key)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "overview" && (
+        <div className="anim-up">
+          {/* Stat cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+            {[
+              ["Total tasks", tasks.length, "var(--accent)"],
+              ["Completed", completed, "var(--green)"],
+              ["Pending", pending, "var(--amber)"],
+              ["Overdue", overdue, "var(--red)"],
+            ].map(([l, v, c]) => (
+              <div key={l as string} className="stat-card" style={{ padding: "14px 16px" }}>
+                <p className="label-text" style={{ marginBottom: 8 }}>{l}</p>
+                <p className="stat-value" style={{ fontSize: 22, color: c as string }}>{v}</p>
               </div>
-              <p
-                style={{
-                  fontSize: 15,
-                  fontWeight: 700,
-                  color: "var(--tx-primary)",
-                }}
-              >
-                {client.name}
-              </p>
-              {client.company && (
-                <p
-                  style={{
-                    fontSize: 13,
-                    color: "var(--tx-tertiary)",
-                    marginTop: 2,
-                  }}
-                >
-                  {client.company}
-                </p>
-              )}
-              <span
-                className={`badge ${client.status === "ACTIVE" ? "badge-green" : client.status === "INACTIVE" ? "badge-red" : "badge-amber"}`}
-                style={{ marginTop: 6, display: "inline-flex" }}
-              >
-                {client.status}
-              </span>
+            ))}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>
+            {/* Checklist view (category breakdown) */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="card" style={{ padding: "16px 18px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <p className="section-title">Onboarding Progress</p>
+                  <p style={{ fontSize: 18, fontWeight: 700, color: "var(--accent)" }}>{rate}%</p>
+                </div>
+                <div className="progress-track" style={{ height: 6 }}><div className="progress-fill" style={{ width: `${rate}%` }} /></div>
+              </div>
+
+              {categories.length === 0 ? (
+                <div className="card empty" style={{ padding: 50 }}>
+                  <p style={{ fontWeight: 500, color: "var(--tx-secondary)" }}>No tasks yet</p>
+                  <p style={{ fontSize: 13 }}>Create the first task for this client</p>
+                </div>
+              ) : categories.map(([cat, catTasks]) => {
+                const catDone = catTasks.filter((t) => t.status === "COMPLETED").length;
+                const catPct = Math.round((catDone / catTasks.length) * 100);
+                return (
+                  <div key={cat} className="card" style={{ overflow: "hidden" }}>
+                    <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--border)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <p style={{ fontSize: 13.5, fontWeight: 600, color: "var(--tx-primary)" }}>{getCategoryEmojiLocal(cat)} {cat}</p>
+                        <p style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>{catDone}/{catTasks.length} done</p>
+                      </div>
+                      <div className="progress-track" style={{ height: 5 }}><div className="progress-fill" style={{ width: `${catPct}%` }} /></div>
+                    </div>
+                    {catTasks.map((t) => {
+                      const isOverdue = new Date(t.endDate) < now && t.status !== "COMPLETED";
+                      return (
+                        <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 18px", borderBottom: "1px solid var(--border)" }}>
+                          <span style={{
+                            width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
+                            border: t.status === "COMPLETED" ? "none" : "1.5px solid var(--border-md)",
+                            background: t.status === "COMPLETED" ? "var(--green)" : "transparent",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}>
+                            {t.status === "COMPLETED" && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
+                          </span>
+                          <p style={{ flex: 1, minWidth: 0, fontSize: 13, color: t.status === "COMPLETED" ? "var(--tx-tertiary)" : "var(--tx-primary)", textDecoration: t.status === "COMPLETED" ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</p>
+                          <span className={`badge ${isOverdue ? "badge-red" : S_BADGE[t.status] || "badge-gray"}`} style={{ flexShrink: 0 }}>{isOverdue ? "Overdue" : S_LABEL[t.status] || t.status}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 6,
-                marginBottom: 14,
-              }}
-            >
-              {[
-                ["Done", completed, "var(--green)"],
-                ["Pending", pending, "var(--tx-secondary)"],
-                ["Changes", changes, "var(--amber)"],
-                ["Overdue", overdue, "var(--red)"],
-              ].map(([l, v, c]) => (
-                <div
-                  key={l as string}
-                  style={{
-                    background: "var(--hover-bg)",
-                    borderRadius: "var(--r-sm)",
-                    padding: "8px 6px",
-                    textAlign: "center",
-                  }}
-                >
-                  <p
-                    style={{
-                      fontSize: 18,
-                      fontWeight: 700,
-                      color: c as string,
-                      letterSpacing: "-0.02em",
-                    }}
-                  >
-                    {v}
-                  </p>
-                  <p
-                    style={{
-                      fontSize: 10.5,
-                      color: "var(--tx-tertiary)",
-                      marginTop: 1,
-                    }}
-                  >
-                    {l}
-                  </p>
-                </div>
+            {/* Right rail: client info + portal */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="card" style={{ padding: 18 }}>
+                {!editClient ? (
+                  <div>
+                    <p className="section-title" style={{ marginBottom: 10 }}>Client Info</p>
+                    {[
+                      ["Email", client.email],
+                      ["Phone", client.phone],
+                      ["Website", client.website],
+                      ["Notes", client.notes],
+                    ].filter(([, v]) => v).map(([l, v]) => (
+                      <div key={l as string} className="property-row">
+                        <span className="property-label">{l}</span>
+                        <span className="property-value" style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+                      </div>
+                    ))}
+                    <button className="btn btn-secondary" style={{ width: "100%", marginTop: 10, fontSize: 12.5 }} onClick={() => setEditClient(true)}>Edit client</button>
+                  </div>
+                ) : (
+                  <form onSubmit={saveClient} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {[
+                      { k: "name", l: "Name", req: true },
+                      { k: "email", l: "Email", req: true },
+                      { k: "phone", l: "Phone" },
+                      { k: "company", l: "Company" },
+                      { k: "website", l: "Website" },
+                    ].map(({ k, l, req }) => (
+                      <div key={k}>
+                        <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--tx-secondary)", marginBottom: 4 }}>{l}</label>
+                        <input className="input" required={req} value={cform[k as keyof typeof cform]} onChange={(e) => setCform({ ...cform, [k]: e.target.value })} style={{ fontSize: 12.5 }} />
+                      </div>
+                    ))}
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--tx-secondary)", marginBottom: 4 }}>Notes</label>
+                      <textarea className="input" value={cform.notes} onChange={(e) => setCform({ ...cform, notes: e.target.value })} rows={2} style={{ fontSize: 12.5, minHeight: 50 }} />
+                    </div>
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "var(--tx-secondary)", marginBottom: 4 }}>Status</label>
+                      <select className="input" value={cform.status} onChange={(e) => setCform({ ...cform, status: e.target.value })} style={{ fontSize: 12.5 }}>
+                        {CLIENT_S.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                      <button type="button" className="btn btn-secondary" style={{ flex: 1, fontSize: 12 }} onClick={() => setEditClient(false)}>Cancel</button>
+                      <button type="submit" className="btn btn-primary" style={{ flex: 1, fontSize: 12 }} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+                    </div>
+                  </form>
+                )}
+              </div>
+              <PortalSettings clientId={id} portalEnabled={client.portalEnabled} onSave={load} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "tasks" && (
+        <div className="card anim-up" style={{ overflow: "hidden" }}>
+          <div style={{ padding: "13px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div className="filter-tabs-wrap" style={{ marginRight: "auto" }}>
+              <button className={`filter-tab${catFilter === "All" ? " active" : ""}`} onClick={() => setCatFilter("All")}>All <span className="count">{tasks.length}</span></button>
+              {categories.map(([cat, catTasks]) => (
+                <button key={cat} className={`filter-tab${catFilter === cat ? " active" : ""}`} onClick={() => setCatFilter(cat)}>
+                  {getCategoryEmojiLocal(cat)} {cat} <span className="count">{catTasks.length}</span>
+                </button>
               ))}
             </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  marginBottom: 4,
-                }}
-              >
-                <p style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>
-                  Completion
-                </p>
-                <p
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: "var(--accent)",
-                  }}
-                >
-                  {rate}%
-                </p>
-              </div>
-              <div className="progress-track">
-                <div className="progress-fill" style={{ width: `${rate}%` }} />
-              </div>
-            </div>
-
-            {!editClient ? (
-              <div>
-                {[
-                  ["Email", client.email],
-                  ["Phone", client.phone],
-                  ["Website", client.website],
-                  ["Notes", client.notes],
-                ]
-                  .filter(([, v]) => v)
-                  .map(([l, v]) => (
-                    <div key={l as string} className="property-row">
-                      <span className="property-label">{l}</span>
-                      <span
-                        className="property-value"
-                        style={{
-                          fontSize: 12.5,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {v}
-                      </span>
-                    </div>
-                  ))}
-                <button
-                  className="btn btn-secondary"
-                  style={{ width: "100%", marginTop: 10, fontSize: 12.5 }}
-                  onClick={() => setEditClient(true)}
-                >
-                  Edit client
-                </button>
-              </div>
-            ) : (
-              <form
-                onSubmit={saveClient}
-                style={{ display: "flex", flexDirection: "column", gap: 8 }}
-              >
-                {[
-                  { k: "name", l: "Name", req: true },
-                  { k: "email", l: "Email", req: true },
-                  { k: "phone", l: "Phone" },
-                  { k: "company", l: "Company" },
-                  { k: "website", l: "Website" },
-                ].map(({ k, l, req }) => (
-                  <div key={k}>
-                    <label
-                      style={{
-                        display: "block",
-                        fontSize: 12,
-                        fontWeight: 500,
-                        color: "var(--tx-secondary)",
-                        marginBottom: 4,
-                      }}
-                    >
-                      {l}
-                    </label>
-                    <input
-                      className="input"
-                      required={req}
-                      value={cform[k as keyof typeof cform]}
-                      onChange={(e) =>
-                        setCform({ ...cform, [k]: e.target.value })
-                      }
-                      style={{ fontSize: 12.5 }}
-                    />
-                  </div>
-                ))}
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: "var(--tx-secondary)",
-                      marginBottom: 4,
-                    }}
-                  >
-                    Notes
-                  </label>
-                  <textarea
-                    className="input"
-                    value={cform.notes}
-                    onChange={(e) =>
-                      setCform({ ...cform, notes: e.target.value })
-                    }
-                    rows={2}
-                    style={{ fontSize: 12.5, minHeight: 50 }}
-                  />
-                </div>
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: "var(--tx-secondary)",
-                      marginBottom: 4,
-                    }}
-                  >
-                    Status
-                  </label>
-                  <select
-                    className="input"
-                    value={cform.status}
-                    onChange={(e) =>
-                      setCform({ ...cform, status: e.target.value })
-                    }
-                    style={{ fontSize: 12.5 }}
-                  >
-                    {CLIENT_S.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ flex: 1, fontSize: 12 }}
-                    onClick={() => setEditClient(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="btn btn-primary"
-                    style={{ flex: 1, fontSize: 12 }}
-                    disabled={saving}
-                  >
-                    {saving ? "Saving…" : "Save"}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-          <PortalSettings
-            clientId={id}
-            portalEnabled={client.portalEnabled}
-            onSave={load}
-          />
-        </div>
-
-        {/* Tasks panel */}
-        <div
-          className="card"
-          style={{ overflow: "hidden", alignSelf: "start" }}
-        >
-          <div
-            style={{
-              padding: "14px 18px",
-              borderBottom: "1px solid var(--border)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <div>
-              <p className="section-title">Tasks</p>
-              <p
-                style={{
-                  fontSize: 12,
-                  color: "var(--tx-tertiary)",
-                  marginTop: 2,
-                }}
-              >
-                {completed} of {tasks.length} completed
-              </p>
-            </div>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => {
-                setSelectedTask(null);
-                setTaskModal("add");
-              }}
-            >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-              >
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              New task
-            </button>
-          </div>
-
-          {/* Status filter tabs */}
-          <div
-            style={{
-              padding: "8px 14px",
-              borderBottom: "1px solid var(--border)",
-              display: "flex",
-              gap: 4,
-            }}
-          >
             <div className="filter-tabs-wrap">
-              {[
-                ["", "All", tasks.length],
-                [
-                  "PENDING",
-                  "Pending",
-                  tasks.filter((t) => t.status === "PENDING").length,
-                ],
-                [
-                  "IN_PROGRESS",
-                  "Active",
-                  tasks.filter((t) => t.status === "IN_PROGRESS").length,
-                ],
-                ["COMPLETED", "Done", completed],
-                ["CHANGES_REQUIRED", "Changes", changes],
-                ["OVERDUE", "Overdue", overdue],
-              ].map(([k, l, c]) =>
-                (c as number) > 0 || k === "" ? (
-                  <button
-                    key={k as string}
-                    className={`filter-tab${sf === k ? " active" : ""}`}
-                    onClick={() => setSf(k as string)}
-                  >
-                    {l} <span className="count">{c}</span>
-                  </button>
-                ) : null,
-              )}
+              {[["", "All status"], ["PENDING", "Pending"], ["IN_PROGRESS", "Active"], ["COMPLETED", "Done"], ["CHANGES_REQUIRED", "Changes"], ["OVERDUE", "Overdue"]].map(([k, l]) => (
+                <button key={k} className={`filter-tab${sf === k ? " active" : ""}`} onClick={() => setSf(k)}>{l}</button>
+              ))}
             </div>
           </div>
 
-          {filtered.length === 0 ? (
+          {(sf ? tasksForTable.filter((t) => t.status === sf) : tasksForTable).length === 0 ? (
             <div className="empty" style={{ padding: 40 }}>
-              <p style={{ fontWeight: 500, color: "var(--tx-secondary)" }}>
-                No tasks
-              </p>
-              <p style={{ fontSize: 13 }}>
-                Create the first task for this client
-              </p>
+              <p style={{ fontWeight: 500, color: "var(--tx-secondary)" }}>No tasks</p>
+              <p style={{ fontSize: 13 }}>Create the first task for this client</p>
             </div>
           ) : (
-            filtered.map((task) => {
-              const overdue =
-                new Date(task.endDate) < new Date() &&
-                task.status !== "COMPLETED";
-              return (
-                <div
-                  key={task.id}
-                  style={{
-                    padding: "12px 18px",
-                    borderBottom: "1px solid var(--border)",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      {/* Category breadcrumb */}
-                      {task.category && (
-                        <div style={{ marginBottom: 6 }}>
-                          <TaskCategoryBadge
-                            category={task.category}
-                            subCategory={task.subCategory}
-                            taskType={task.taskType}
-                          />
-                        </div>
-                      )}
-
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          flexWrap: "wrap",
-                          marginBottom: 4,
-                        }}
-                      >
-                        <p
-                          style={{
-                            fontSize: 13.5,
-                            fontWeight: 500,
-                            color:
-                              task.status === "COMPLETED"
-                                ? "var(--tx-tertiary)"
-                                : "var(--tx-primary)",
-                            textDecoration:
-                              task.status === "COMPLETED"
-                                ? "line-through"
-                                : "none",
-                          }}
-                        >
-                          {task.title}
-                        </p>
-                        <span
-                          className={`badge ${S_BADGE[task.status] || "badge-gray"}`}
-                        >
-                          {S_LABEL[task.status] || task.status}
-                        </span>
-                      </div>
-                      {task.description && (
-                        <p
-                          style={{
-                            fontSize: 12.5,
-                            color: "var(--tx-tertiary)",
-                            marginBottom: 4,
-                          }}
-                        >
-                          {task.description}
-                        </p>
-                      )}
-                      {task.employee && (
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 5,
-                            marginBottom: 4,
-                          }}
-                        >
-                          <div
-                            className="avatar"
-                            style={{ width: 16, height: 16, fontSize: 8 }}
-                          >
-                            {task.employee.name
-                              .split(" ")
-                              .map((n) => n[0])
-                              .join("")
-                              .toUpperCase()
-                              .slice(0, 2)}
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Task</th><th>Category</th><th>Assignee</th><th>Due date</th><th>Priority</th><th>Status</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {(sf ? tasksForTable.filter((t) => t.status === sf) : tasksForTable).map((task) => {
+                    const isOverdue = new Date(task.endDate) < now && task.status !== "COMPLETED";
+                    return (
+                      <tr key={task.id}>
+                        <td style={{ maxWidth: 220 }}>
+                          <p style={{ fontSize: 13, fontWeight: 500, color: task.status === "COMPLETED" ? "var(--tx-tertiary)" : "var(--tx-primary)", textDecoration: task.status === "COMPLETED" ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.title}</p>
+                          {task.taskType && <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.taskType}</p>}
+                        </td>
+                        <td>{task.category ? <TaskCategoryBadge category={task.category} compact /> : <span style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>—</span>}</td>
+                        <td>
+                          {task.employee ? (
+                            <Link href={`/dashboard/employees/${task.employee.id}`} style={{ display: "flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+                              <div className="avatar" style={{ width: 20, height: 20, fontSize: 9 }}>{task.employee.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)}</div>
+                              <span style={{ fontSize: 12.5, color: "var(--tx-secondary)", whiteSpace: "nowrap" }}>{task.employee.name}</span>
+                            </Link>
+                          ) : <span style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>Unassigned</span>}
+                        </td>
+                        <td style={{ fontSize: 12.5, color: isOverdue ? "var(--red)" : "var(--tx-secondary)", whiteSpace: "nowrap" }}>{formatDate(task.endDate)}{isOverdue ? " ⚠" : ""}</td>
+                        <td><span className="badge badge-gray">{task.priority}</span></td>
+                        <td>
+                          <select value={task.status} onChange={(e) => updateStatus(task.id, e.target.value)} className="input" style={{ width: "auto", padding: "4px 8px", fontSize: 11.5, height: "auto" }}>
+                            {TASK_S.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
+                          </select>
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+                            <button className="btn-ghost btn-icon" onClick={() => { setSelectedTask(task); setTaskModal("edit"); }}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                            </button>
+                            <button className="btn-ghost btn-icon" onClick={() => deleteTask(task.id)}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6M9 6V4h6v2" /></svg>
+                            </button>
                           </div>
-                          <Link
-                            href={`/dashboard/employees/${task.employee.id}`}
-                            style={{
-                              fontSize: 12,
-                              color: "var(--tx-secondary)",
-                              textDecoration: "none",
-                            }}
-                          >
-                            {task.employee.name}
-                          </Link>
-                          <span
-                            style={{
-                              fontSize: 11.5,
-                              color: "var(--tx-tertiary)",
-                            }}
-                          >
-                            · {task.employee.department}
-                          </span>
-                        </div>
-                      )}
-                      <p style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>
-                        {formatDate(task.startDate)} →{" "}
-                        <span
-                          style={{
-                            color: overdue
-                              ? "var(--red)"
-                              : "var(--tx-tertiary)",
-                          }}
-                        >
-                          {formatDate(task.endDate)}
-                          {overdue ? " ⚠" : ""}
-                        </span>
-                        {task.completedAt && (
-                          <span
-                            style={{ color: "var(--green)", marginLeft: 6 }}
-                          >
-                            ✓ {formatDate(task.completedAt)}
-                          </span>
-                        )}
-                      </p>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 4,
-                        flexShrink: 0,
-                      }}
-                    >
-                      <select
-                        value={task.status}
-                        onChange={(e) => updateStatus(task.id, e.target.value)}
-                        className="input"
-                        style={{
-                          width: "auto",
-                          padding: "4px 8px",
-                          fontSize: 11.5,
-                          height: "auto",
-                        }}
-                      >
-                        {TASK_S.map((s) => (
-                          <option key={s} value={s}>
-                            {s.replace(/_/g, " ")}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        className="btn-ghost btn-icon"
-                        onClick={() => {
-                          setSelectedTask(task);
-                          setTaskModal("edit");
-                        }}
-                      >
-                        <svg
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                        </svg>
-                      </button>
-                      <button
-                        className="btn-ghost btn-icon"
-                        onClick={() => deleteTask(task.id)}
-                      >
-                        <svg
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <polyline points="3 6 5 6 21 6" />
-                          <path d="M19 6l-1 14H6L5 6" />
-                          <path d="M10 11v6M14 11v6M9 6V4h6v2" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
-      </div>
+      )}
+
+      {(tab === "files" || tab === "reports" || tab === "invoices") && (
+        <div className="card empty anim-up" style={{ padding: 70 }}>
+          <p style={{ fontSize: 26, marginBottom: 8 }}>{tab === "files" ? "📁" : tab === "reports" ? "📄" : "🧾"}</p>
+          <p style={{ fontWeight: 600, color: "var(--tx-secondary)" }}>{TABS.find((t) => t.key === tab)?.label} coming soon</p>
+          <p style={{ fontSize: 13 }}>This section isn&apos;t wired up to data yet.</p>
+        </div>
+      )}
 
       {(taskModal === "add" || taskModal === "edit") && (
         <TaskModal

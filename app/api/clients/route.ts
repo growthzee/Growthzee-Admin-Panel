@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
         : {},
       include: {
         clientTasks: {
-          select: { id: true, status: true, createdAt: true, completedAt: true },
+          select: { id: true, title: true, status: true, category: true, startDate: true, endDate: true, createdAt: true, completedAt: true },
         },
       },
       orderBy: { createdAt: "desc" },

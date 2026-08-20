@@ -1,6 +1,6 @@
 "use client";
 import TaskCategoryBadge from "@/components/TaskCategoryBadge";
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatDate } from "@/lib/utils";
@@ -17,9 +17,9 @@ type Task = {
   priority: string;
   startDate: string;
   endDate: string;
-  completedAt?: string;
+  completedAt?: string | null;
   _type: "internal" | "client";
-  client?: { id: string; name: string; company?: string };
+  client?: { id: string; name: string; company?: string } | null;
 };
 
 type Employee = {
@@ -35,6 +35,8 @@ type Employee = {
   tasks: Omit<Task, "_type" | "client">[];
 };
 
+type AttendanceRecord = { date: string; status: string };
+
 // ── Constants ────────────────────────────────────────────────────────────────
 const DEPTS    = ["Engineering", "Design", "Marketing", "Sales", "HR", "Finance", "Operations"];
 const STATUSES = ["ACTIVE", "INACTIVE", "ON_LEAVE"];
@@ -42,822 +44,157 @@ const PRIS     = ["LOW", "MEDIUM", "HIGH", "URGENT"];
 const INT_S    = ["PENDING", "IN_PROGRESS", "COMPLETED", "OVERDUE"];
 const CLI_S    = ["PENDING", "IN_PROGRESS", "COMPLETED", "CHANGES_REQUIRED", "OVERDUE"];
 
-const STATUS_DOT: Record<string, string> = {
-  PENDING: "#2a2a2a",
-  IN_PROGRESS: "#888",
-  COMPLETED: "#fff",
-  CHANGES_REQUIRED: "#f59e0b",
-  OVERDUE: "#ef4444",
+const S_BADGE: Record<string, string> = {
+  PENDING: "badge-gray", IN_PROGRESS: "badge-blue", COMPLETED: "badge-green",
+  CHANGES_REQUIRED: "badge-amber", OVERDUE: "badge-red",
 };
-const STATUS_TXT: Record<string, string> = {
-  PENDING: "var(--text-2)",
-  IN_PROGRESS: "var(--text-1)",
-  COMPLETED: "var(--text-0)",
-  CHANGES_REQUIRED: "#f59e0b",
-  OVERDUE: "#ef4444",
+const S_LABEL: Record<string, string> = {
+  PENDING: "Pending", IN_PROGRESS: "In progress", COMPLETED: "Done",
+  CHANGES_REQUIRED: "Changes needed", OVERDUE: "Overdue",
 };
 
-// ── Creative content type filters ────────────────────────────────────────────
-// Each entry defines the pill label and the keywords used to fuzzy-match
-// against task title, description, category, subCategory, and taskType.
-const CONTENT_FILTERS = [
-  {
-    key: "reels",
-    label: "Reels",
-    icon: "▶",
-    keywords: ["reel", "reels", "short video", "short clip", "instagram reel", "fb reel"],
-  },
-  {
-    key: "carousel",
-    label: "Carousel",
-    icon: "◫",
-    keywords: ["carousel", "carousel post", "swipe", "multi-image", "multi image", "slide post"],
-  },
-  {
-    key: "creative",
-    label: "Creative Posts",
-    icon: "✦",
-    keywords: ["creative post", "creative", "graphic post", "static post", "design post", "social post"],
-  },
-  {
-    key: "ads_creative",
-    label: "Ads Creative",
-    icon: "◈",
-    keywords: ["ads creative", "ad creative", "paid creative", "sponsored creative", "ad design", "advertising creative"],
-  },
-  {
-    key: "ads_reel",
-    label: "Ads Reels",
-    icon: "▶◈",
-    keywords: ["ads reel", "ad reel", "reel ad", "paid reel", "sponsored reel", "video ad", "reel advertisement"],
-  },
-  {
-    key: "ads_carousel",
-    label: "Ads Carousel",
-    icon: "◫◈",
-    keywords: ["ads carousel", "ad carousel", "carousel ad", "paid carousel", "sponsored carousel", "carousel advertisement"],
-  },
-  {
-    key: "banner",
-    label: "Website Banner",
-    icon: "▬",
-    keywords: ["website banner", "web banner", "banner", "hero banner", "landing banner", "site banner", "header banner"],
-  },
-  {
-    key: "catalogue",
-    label: "Catalogue",
-    icon: "⊟",
-    keywords: ["catalogue", "catalog", "catalogue image", "catalog image", "product catalogue", "product catalog", "lookbook"],
-  },
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "tasks", label: "Tasks" },
+  { key: "attendance", label: "Attendance" },
 ] as const;
+type TabKey = (typeof TABS)[number]["key"];
 
+// Creative content-type filters — fuzzy-matched against task text
+const CONTENT_FILTERS = [
+  { key: "reels",        label: "Reels",           keywords: ["reel", "reels", "short video", "short clip"] },
+  { key: "carousel",     label: "Carousel",        keywords: ["carousel", "swipe", "multi-image", "multi image"] },
+  { key: "creative",     label: "Creative Posts",  keywords: ["creative post", "creative", "graphic post", "static post", "design post", "social post"] },
+  { key: "ads_creative", label: "Ads Creative",    keywords: ["ads creative", "ad creative", "paid creative", "ad design"] },
+  { key: "ads_reel",     label: "Ads Reels",       keywords: ["ads reel", "ad reel", "reel ad", "paid reel", "video ad"] },
+  { key: "ads_carousel", label: "Ads Carousel",    keywords: ["ads carousel", "ad carousel", "carousel ad", "paid carousel"] },
+  { key: "banner",       label: "Website Banner",  keywords: ["website banner", "web banner", "banner", "hero banner", "landing banner"] },
+  { key: "catalogue",    label: "Catalogue",       keywords: ["catalogue", "catalog", "product catalogue", "lookbook"] },
+] as const;
 type ContentFilterKey = (typeof CONTENT_FILTERS)[number]["key"] | null;
 
-/** Returns true if the task text matches any keyword for the given filter */
 function taskMatchesContentFilter(task: Task, filterKey: ContentFilterKey): boolean {
   if (!filterKey) return true;
   const filter = CONTENT_FILTERS.find((f) => f.key === filterKey);
   if (!filter) return true;
-
-  const haystack = [
-    task.title,
-    task.description,
-    task.category,
-    task.subCategory,
-    task.taskType,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
+  const haystack = [task.title, task.description, task.category, task.subCategory, task.taskType]
+    .filter(Boolean).join(" ").toLowerCase();
   return filter.keywords.some((kw) => haystack.includes(kw.toLowerCase()));
 }
 
-// ── Quick-month presets ──────────────────────────────────────────────────────
-const MONTH_PRESETS = [
-  {
-    label: "This Month",
-    getValue: () => {
-      const n = new Date();
-      return {
-        from: new Date(n.getFullYear(), n.getMonth(), 1).toISOString().split("T")[0],
-        to: new Date(n.getFullYear(), n.getMonth() + 1, 0).toISOString().split("T")[0],
-      };
-    },
-  },
-  {
-    label: "Last Month",
-    getValue: () => {
-      const n = new Date();
-      return {
-        from: new Date(n.getFullYear(), n.getMonth() - 1, 1).toISOString().split("T")[0],
-        to: new Date(n.getFullYear(), n.getMonth(), 0).toISOString().split("T")[0],
-      };
-    },
-  },
-  {
-    label: "Last 7 Days",
-    getValue: () => {
-      const n = new Date();
-      const p = new Date(n);
-      p.setDate(p.getDate() - 6);
-      return { from: p.toISOString().split("T")[0], to: n.toISOString().split("T")[0] };
-    },
-  },
-  {
-    label: "Last 30 Days",
-    getValue: () => {
-      const n = new Date();
-      const p = new Date(n);
-      p.setDate(p.getDate() - 29);
-      return { from: p.toISOString().split("T")[0], to: n.toISOString().split("T")[0] };
-    },
-  },
-  {
-    label: "Last 3 Mo",
-    getValue: () => {
-      const n = new Date();
-      return {
-        from: new Date(n.getFullYear(), n.getMonth() - 2, 1).toISOString().split("T")[0],
-        to: n.toISOString().split("T")[0],
-      };
-    },
-  },
-];
-
-// ── DateRangeFilter ──────────────────────────────────────────────────────────
-function DateRangeFilter({
-  from,
-  to,
-  onChange,
-  onClear,
-}: {
-  from: string;
-  to: string;
-  onChange: (from: string, to: string) => void;
-  onClear: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState({ from, to });
-  const active = !!(from || to);
-
-  function applyPreset(preset: (typeof MONTH_PRESETS)[0]) {
-    const v = preset.getValue();
-    onChange(v.from, v.to);
-    setDraft(v);
-    setOpen(false);
-  }
-
-  function applyCustom() {
-    onChange(draft.from, draft.to);
-    setOpen(false);
-  }
-
-  function handleClear() {
-    setDraft({ from: "", to: "" });
-    onClear();
-    setOpen(false);
-  }
-
-  useEffect(() => {
-    setDraft({ from, to });
-  }, [from, to]);
-
-  return (
-    <div style={{ position: "relative" }}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 10px",
-          borderRadius: "var(--radius-sm)",
-          border: `1px solid ${active ? "rgba(255,255,255,0.25)" : "var(--border-0)"}`,
-          background: active ? "rgba(255,255,255,0.07)" : "transparent",
-          color: active ? "var(--text-0)" : "var(--text-2)",
-          fontSize: 11,
-          cursor: "pointer",
-          transition: "all .15s",
-        }}
-      >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="3" y="4" width="18" height="18" rx="2" />
-          <line x1="16" y1="2" x2="16" y2="6" />
-          <line x1="8" y1="2" x2="8" y2="6" />
-          <line x1="3" y1="10" x2="21" y2="10" />
-        </svg>
-        {active
-          ? `${from ? formatDate(from) : "…"} → ${to ? formatDate(to) : "…"}`
-          : "Date Range"}
-        {active && (
-          <span
-            onClick={(e) => {
-              e.stopPropagation();
-              handleClear();
-            }}
-            style={{ marginLeft: 2, opacity: 0.5, lineHeight: 1, cursor: "pointer" }}
-          >
-            ✕
-          </span>
-        )}
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}
-        >
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-
-      {open && (
-        <>
-          <div
-            style={{ position: "fixed", inset: 0, zIndex: 99 }}
-            onClick={() => setOpen(false)}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(100% + 6px)",
-              right: 0,
-              zIndex: 100,
-              background: "var(--surface-1)",
-              border: "1px solid var(--border-0)",
-              borderRadius: "var(--radius-md)",
-              padding: 14,
-              width: 260,
-              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-            }}
-          >
-            <p
-              style={{
-                fontSize: 10,
-                color: "var(--text-2)",
-                textTransform: "uppercase",
-                letterSpacing: "0.1em",
-                marginBottom: 8,
-              }}
-            >
-              Quick Select
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
-              {MONTH_PRESETS.map((p) => {
-                const v = p.getValue();
-                const isActive = from === v.from && to === v.to;
-                return (
-                  <button
-                    key={p.label}
-                    onClick={() => applyPreset(p)}
-                    style={{
-                      fontSize: 10,
-                      padding: "3px 8px",
-                      borderRadius: 999,
-                      border: `1px solid ${isActive ? "rgba(255,255,255,0.3)" : "var(--border-0)"}`,
-                      background: isActive ? "rgba(255,255,255,0.1)" : "transparent",
-                      color: isActive ? "var(--text-0)" : "var(--text-2)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {p.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <p
-              style={{
-                fontSize: 10,
-                color: "var(--text-2)",
-                textTransform: "uppercase",
-                letterSpacing: "0.1em",
-                marginBottom: 8,
-              }}
-            >
-              Custom Range
-            </p>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 8,
-                marginBottom: 10,
-              }}
-            >
-              <div>
-                <p style={{ fontSize: 10, color: "var(--text-2)", marginBottom: 4 }}>From</p>
-                <input
-                  className="input"
-                  type="date"
-                  style={{ fontSize: 11, padding: "5px 8px" }}
-                  value={draft.from}
-                  onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))}
-                />
-              </div>
-              <div>
-                <p style={{ fontSize: 10, color: "var(--text-2)", marginBottom: 4 }}>To</p>
-                <input
-                  className="input"
-                  type="date"
-                  style={{ fontSize: 11, padding: "5px 8px" }}
-                  value={draft.to}
-                  onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                className="btn btn-secondary"
-                style={{ flex: 1, fontSize: 11 }}
-                onClick={handleClear}
-              >
-                Clear
-              </button>
-              <button
-                className="btn btn-primary"
-                style={{ flex: 1, fontSize: 11 }}
-                disabled={!draft.from && !draft.to}
-                onClick={applyCustom}
-              >
-                Apply
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
+function isOverdue(t: Task, now: Date) {
+  return t.status !== "COMPLETED" && new Date(t.endDate) < now;
 }
 
-// ── ContentTypeFilter ────────────────────────────────────────────────────────
-function ContentTypeFilter({
-  value,
-  onChange,
-}: {
-  value: ContentFilterKey;
-  onChange: (v: ContentFilterKey) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const active = value !== null;
-  const current = CONTENT_FILTERS.find((f) => f.key === value);
-
-  return (
-    <div style={{ position: "relative" }}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 10px",
-          borderRadius: "var(--radius-sm)",
-          border: `1px solid ${active ? "rgba(255,255,255,0.25)" : "var(--border-0)"}`,
-          background: active ? "rgba(255,255,255,0.07)" : "transparent",
-          color: active ? "var(--text-0)" : "var(--text-2)",
-          fontSize: 11,
-          cursor: "pointer",
-          transition: "all .15s",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {/* film-strip icon */}
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="2" y="2" width="20" height="20" rx="2" />
-          <path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5" />
-        </svg>
-        {active ? current?.label : "Content Type"}
-        {active && (
-          <span
-            onClick={(e) => { e.stopPropagation(); onChange(null); setOpen(false); }}
-            style={{ marginLeft: 2, opacity: 0.5, lineHeight: 1, cursor: "pointer" }}
-          >
-            ✕
-          </span>
-        )}
-        <svg
-          width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-          style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}
-        >
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-
-      {open && (
-        <>
-          <div style={{ position: "fixed", inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(100% + 6px)",
-              right: 0,
-              zIndex: 100,
-              background: "var(--surface-1)",
-              border: "1px solid var(--border-0)",
-              borderRadius: "var(--radius-md)",
-              padding: 10,
-              width: 220,
-              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-            }}
-          >
-            <p style={{ fontSize: 10, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8, paddingLeft: 4 }}>
-              Filter by content type
-            </p>
-
-            {/* "All" option */}
-            <button
-              onClick={() => { onChange(null); setOpen(false); }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                width: "100%",
-                padding: "7px 8px",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                background: value === null ? "rgba(255,255,255,0.08)" : "transparent",
-                color: value === null ? "var(--text-0)" : "var(--text-2)",
-                fontSize: 12,
-                cursor: "pointer",
-                textAlign: "left",
-                transition: "background .12s",
-              }}
-            >
-              <span style={{ fontSize: 11, width: 18, textAlign: "center", opacity: 0.5 }}>✦</span>
-              All types
-              {value === null && (
-                <svg style={{ marginLeft: "auto" }} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              )}
-            </button>
-
-            <div style={{ height: 1, background: "var(--border-0)", margin: "6px 0" }} />
-
-            {CONTENT_FILTERS.map((f) => {
-              const isSelected = value === f.key;
-              return (
-                <button
-                  key={f.key}
-                  onClick={() => { onChange(f.key); setOpen(false); }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    width: "100%",
-                    padding: "7px 8px",
-                    borderRadius: "var(--radius-sm)",
-                    border: "none",
-                    background: isSelected ? "rgba(255,255,255,0.08)" : "transparent",
-                    color: isSelected ? "var(--text-0)" : "var(--text-2)",
-                    fontSize: 12,
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "background .12s",
-                  }}
-                >
-                  <span style={{ fontSize: 10, width: 18, textAlign: "center", letterSpacing: "-0.02em", opacity: isSelected ? 1 : 0.5 }}>
-                    {f.icon}
-                  </span>
-                  {f.label}
-                  {isSelected && (
-                    <svg style={{ marginLeft: "auto" }} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
-    </div>
-  );
+/** Group key used by the Overview checklist: client tasks by category, internal tasks together */
+function groupKey(t: Task) {
+  return t._type === "client" ? (t.category || "Uncategorized") : "Internal Tasks";
+}
+function groupEmoji(group: string) {
+  const map: Record<string, string> = {
+    "Internal Tasks": "🗂️", "Social Media Management": "📱", "Paid Ads (Performance Marketing)": "📢",
+    "Website / SEO": "🌐", "E-commerce Management": "🛒", "Client Management": "🤝",
+    "Reporting & Analysis": "📊", "Strategy & Planning": "🧠", "Video Production": "🎬",
+    "Automation / Tools": "🤖", "Uncategorized": "📋",
+  };
+  return map[group] || "📋";
 }
 
-// ── RangeDateChart ───────────────────────────────────────────────────────────
-function RangeDateChart({
-  labels,
-  intData,
-  cliData,
-  ovdData,
+// ── TaskDetailModal — inspect a single task ──────────────────────────────────
+function TaskDetailModal({
+  task, onClose, onEdit, onComplete,
 }: {
-  labels: string[];
-  intData: number[];
-  cliData: number[];
-  ovdData: number[];
+  task: Task;
+  onClose: () => void;
+  onEdit: () => void;
+  onComplete: () => void;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Store the chart instance so we can destroy it on re-render
-  const chartRef = useRef<unknown>(null);
-
-  useEffect(() => {
-    if (!canvasRef.current) return;
-    // Chart.js loaded as UMD global via <script> in layout
-    const ChartJS = (window as unknown as { Chart: new (...args: unknown[]) => { destroy: () => void } }).Chart;
-    if (!ChartJS) return;
-
-    // Destroy previous instance to avoid "Canvas already in use" error
-    if (chartRef.current) {
-      (chartRef.current as { destroy: () => void }).destroy();
-    }
-
-    const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const gridCol = isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)";
-    const lblCol  = isDark ? "#666" : "#999";
-
-    chartRef.current = new ChartJS(canvasRef.current, {
-      type: "bar",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Internal",
-            data: intData,
-            backgroundColor: "#3b82f6",
-            borderRadius: 3,
-            barThickness: labels.length > 10 ? 8 : 12,
-          },
-          {
-            label: "Client",
-            data: cliData,
-            backgroundColor: "#a78bfa",
-            borderRadius: 3,
-            barThickness: labels.length > 10 ? 8 : 12,
-          },
-          {
-            label: "Overdue",
-            data: ovdData,
-            backgroundColor: "#ef4444",
-            borderRadius: 3,
-            barThickness: labels.length > 10 ? 8 : 12,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: "rgba(0,0,0,0.85)",
-            titleFont: { size: 11 },
-            bodyFont: { size: 11 },
-            padding: 8,
-            callbacks: {
-              title: (items: { label: string }[]) => items[0]?.label,
-              label: (item: { dataset: { label: string }; raw: number }) =>
-                ` ${item.dataset.label}: ${item.raw}`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            stacked: true,
-            ticks: {
-              color: lblCol,
-              font: { size: 10 },
-              maxRotation: labels.length > 8 ? 45 : 0,
-              autoSkip: labels.length > 14,
-            },
-            grid: { display: false },
-          },
-          y: {
-            stacked: true,
-            ticks: { color: lblCol, font: { size: 10 }, stepSize: 1, precision: 0 },
-            grid: { color: gridCol },
-            beginAtZero: true,
-          },
-        },
-      },
-    });
-
-    return () => {
-      if (chartRef.current) {
-        (chartRef.current as { destroy: () => void }).destroy();
-        chartRef.current = null;
-      }
-    };
-  }, [labels, intData, cliData, ovdData]);
-
+  const overdue = isOverdue(task, new Date());
   return (
-    <div>
-      <p
-        style={{
-          fontSize: 10,
-          color: "var(--text-2)",
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          marginBottom: 8,
-          fontWeight: 500,
-        }}
-      >
-        Tasks by end date
-      </p>
-      <div style={{ position: "relative", width: "100%", height: 140 }}>
-        <canvas
-          ref={canvasRef}
-          role="img"
-          aria-label="Stacked bar chart showing internal, client and overdue task counts grouped by end date"
-        />
-      </div>
-      {/* Legend */}
-      <div style={{ display: "flex", gap: 14, marginTop: 8 }}>
-        {(
-          [
-            ["#3b82f6", "Internal"],
-            ["#a78bfa", "Client"],
-            ["#ef4444", "Overdue"],
-          ] as [string, string][]
-        ).map(([color, label]) => (
-          <span
-            key={label}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 10,
-              color: "var(--text-2)",
-            }}
-          >
-            <span
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: "50%",
-                background: color,
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-            />
-            {label}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── RangeSummary ─────────────────────────────────────────────────────────────
-function RangeSummary({
-  tasks,
-  from,
-  to,
-}: {
-  tasks: Task[];
-  from: string;
-  to: string;
-}) {
-  // Only render when a date filter is active
-  if (!from && !to) return null;
-
-  const total     = tasks.length;
-  const completed = tasks.filter((t) => t.status === "COMPLETED").length;
-  const inProg    = tasks.filter((t) => t.status === "IN_PROGRESS").length;
-  const pending   = tasks.filter((t) => t.status === "PENDING").length;
-  const overdue   = tasks.filter(
-    (t) => new Date(t.endDate) < new Date() && t.status !== "COMPLETED"
-  ).length;
-  const internal  = tasks.filter((t) => t._type === "internal").length;
-  const client    = tasks.filter((t) => t._type === "client").length;
-  const rate      = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-  // Group by end date for the chart
-  const byDate: Record<string, { internal: number; client: number; overdue: number }> = {};
-  tasks.forEach((t) => {
-    const d = t.endDate.split("T")[0];
-    if (!byDate[d]) byDate[d] = { internal: 0, client: 0, overdue: 0 };
-    if (t._type === "internal") byDate[d].internal++;
-    else byDate[d].client++;
-    if (new Date(t.endDate) < new Date() && t.status !== "COMPLETED") byDate[d].overdue++;
-  });
-  const sortedDates = Object.keys(byDate).sort();
-  const chartLabels = sortedDates.map((d) => formatDate(d));
-  const intData     = sortedDates.map((d) => byDate[d].internal);
-  const cliData     = sortedDates.map((d) => byDate[d].client);
-  const ovdData     = sortedDates.map((d) => byDate[d].overdue);
-
-  const stats = [
-    { label: "Total in range", value: String(total),        color: "var(--text-0)" },
-    { label: "Completed",      value: `${completed} (${rate}%)`, color: "#4ade80" },
-    { label: "In Progress",    value: String(inProg),        color: "var(--text-1)" },
-    { label: "Pending",        value: String(pending),       color: "var(--text-2)" },
-    { label: "Overdue",        value: String(overdue),       color: "#ef4444" },
-    { label: "Internal / Client", value: `${internal} / ${client}`, color: "var(--text-2)" },
-  ];
-
-  return (
-    <div
-      style={{
-        padding: "14px 20px",
-        borderBottom: "1px solid var(--border-0)",
-        background: "var(--surface-2)",
-      }}
-    >
-      {/* Section label */}
-      <p
-        style={{
-          fontSize: 10,
-          color: "var(--text-2)",
-          textTransform: "uppercase",
-          letterSpacing: "0.1em",
-          marginBottom: 10,
-          fontWeight: 500,
-        }}
-      >
-        Range Summary
-        {from && to && (
-          <span style={{ marginLeft: 6, fontWeight: 400 }}>
-            — {formatDate(from)} to {formatDate(to)}
-          </span>
-        )}
-      </p>
-
-      {/* Stat pills */}
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          flexWrap: "wrap",
-          marginBottom: total > 0 && sortedDates.length > 0 ? 14 : 0,
-        }}
-      >
-        {stats.map(({ label, value, color }) => (
-          <div
-            key={label}
-            style={{
-              background: "var(--surface-3)",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid var(--border-0)",
-              padding: "7px 12px",
-              minWidth: 70,
-            }}
-          >
-            <p
-              style={{
-                fontSize: 18,
-                fontWeight: 600,
-                color,
-                lineHeight: 1.1,
-                fontFamily: '"Bebas Neue", sans-serif',
-                letterSpacing: "0.04em",
-              }}
-            >
-              {value}
-            </p>
-            <p
-              style={{
-                fontSize: 9,
-                color: "var(--text-2)",
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                marginTop: 3,
-              }}
-            >
-              {label}
+    <div className="modal-backdrop anim-in" onClick={onClose}>
+      <div className="modal anim-scale" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <p className="section-title">Task details</p>
+            <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 2 }}>
+              {task._type === "client" ? "Client task" : "Internal task"}
             </p>
           </div>
-        ))}
-      </div>
-
-      {/* Date-wise chart — only if there are tasks with distinct end dates */}
-      {total > 0 && sortedDates.length > 0 && (
-        <div
-          style={{
-            background: "var(--surface-3)",
-            borderRadius: "var(--radius-sm)",
-            border: "1px solid var(--border-0)",
-            padding: "12px 14px",
-          }}
-        >
-          <RangeDateChart
-            labels={chartLabels}
-            intData={intData}
-            cliData={cliData}
-            ovdData={ovdData}
-          />
+          <button className="btn-ghost btn-icon" onClick={onClose}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </div>
-      )}
+        <div className="modal-body" style={{ maxHeight: "78vh", overflowY: "auto" }}>
+          {task.category && (
+            <div style={{ marginBottom: 12 }}>
+              <TaskCategoryBadge category={task.category} subCategory={task.subCategory} taskType={task.taskType} />
+            </div>
+          )}
 
-      {/* Empty state within range */}
-      {total === 0 && (
-        <p style={{ fontSize: 11, color: "var(--text-2)", fontStyle: "italic" }}>
-          No tasks fall within this date range.
-        </p>
-      )}
+          <p style={{ fontSize: 16, fontWeight: 600, color: "var(--tx-primary)", marginBottom: 6 }}>{task.title}</p>
+          {task.description && (
+            <p style={{ fontSize: 13, color: "var(--tx-secondary)", lineHeight: 1.6, marginBottom: 14 }}>{task.description}</p>
+          )}
+
+          <div className="divider" style={{ margin: "14px 0" }} />
+
+          <div className="property-row">
+            <span className="property-label">Status</span>
+            <span className="property-value">
+              <span className={`badge ${overdue ? "badge-red" : S_BADGE[task.status] || "badge-gray"}`}>
+                {overdue ? "Overdue" : S_LABEL[task.status] || task.status}
+              </span>
+            </span>
+          </div>
+          <div className="property-row">
+            <span className="property-label">Priority</span>
+            <span className="property-value"><span className="badge badge-gray">{task.priority}</span></span>
+          </div>
+          {task.client && (
+            <div className="property-row">
+              <span className="property-label">Client</span>
+              <span className="property-value">
+                <Link href={`/dashboard/clients/${task.client.id}`} style={{ color: "var(--accent)", textDecoration: "none", fontSize: 13 }}>
+                  {task.client.company || task.client.name} →
+                </Link>
+              </span>
+            </div>
+          )}
+          <div className="property-row">
+            <span className="property-label">Start date</span>
+            <span className="property-value">{formatDate(task.startDate)}</span>
+          </div>
+          <div className="property-row">
+            <span className="property-label">Due date</span>
+            <span className="property-value" style={{ color: overdue ? "var(--red)" : "var(--tx-primary)" }}>
+              {formatDate(task.endDate)}{overdue ? " ⚠" : ""}
+            </span>
+          </div>
+          {task.completedAt && (
+            <div className="property-row">
+              <span className="property-label">Completed on</span>
+              <span className="property-value" style={{ color: "var(--green)" }}>✓ {formatDate(task.completedAt)}</span>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onClose}>Close</button>
+            {task.status !== "COMPLETED" && (
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onComplete}>Mark complete</button>
+            )}
+            <button className="btn btn-primary" style={{ flex: 1 }} onClick={onEdit}>Edit task</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── TaskModal ────────────────────────────────────────────────────────────────
+// ── TaskModal — assign / edit ────────────────────────────────────────────────
 function TaskModal({
-  employeeId,
-  task,
-  onClose,
-  onSave,
+  employeeId, task, onClose, onSave,
 }: {
   employeeId: string;
   task?: Task | null;
@@ -870,14 +207,12 @@ function TaskModal({
     description: task?.description || "",
     priority: task?.priority || "MEDIUM",
     status: task?.status || "PENDING",
-    startDate: task?.startDate
-      ? task.startDate.split("T")[0]
-      : new Date().toISOString().split("T")[0],
+    startDate: task?.startDate ? task.startDate.split("T")[0] : new Date().toISOString().split("T")[0],
     endDate: task?.endDate ? task.endDate.split("T")[0] : "",
     employeeId,
   });
   const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
+  const [error, setError] = useState("");
   const statuses = isClient ? CLI_S : INT_S;
 
   async function submit(e: React.FormEvent) {
@@ -886,9 +221,7 @@ function TaskModal({
     setLoading(true);
     try {
       const url = task
-        ? isClient
-          ? `/api/client-tasks/${task.id}`
-          : `/api/tasks/${task.id}`
+        ? isClient ? `/api/client-tasks/${task.id}` : `/api/tasks/${task.id}`
         : `/api/tasks`;
       const res = await fetch(url, {
         method: task ? "PUT" : "POST",
@@ -911,140 +244,61 @@ function TaskModal({
       <div className="modal anim-scale">
         <div className="modal-header">
           <div>
-            <p className="section-title">{task ? "Edit Task" : "Assign Task"}</p>
+            <p className="section-title">{task ? "Edit task" : "Assign task"}</p>
             {isClient && task?.client && (
-              <p style={{ fontSize: 11, color: "var(--text-2)", marginTop: 2 }}>
+              <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 2 }}>
                 Client: {task.client.company || task.client.name}
               </p>
             )}
           </div>
           <button className="btn-ghost btn-icon" onClick={onClose}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
         </div>
         <div className="modal-body">
           {error && (
-            <div
-              style={{
-                padding: "8px 12px",
-                background: "rgba(239,68,68,0.08)",
-                border: "1px solid rgba(239,68,68,0.2)",
-                borderRadius: "var(--radius-sm)",
-                color: "#ef4444",
-                fontSize: 12,
-                marginBottom: 14,
-              }}
-            >
+            <div style={{ padding: "8px 12px", background: "var(--red-bg)", borderRadius: "var(--r-md)", color: "var(--red)", fontSize: 13, marginBottom: 14 }}>
               {error}
             </div>
           )}
-          <form
-            onSubmit={submit}
-            style={{ display: "flex", flexDirection: "column", gap: 12 }}
-          >
+          <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
-              <p className="label" style={{ marginBottom: 5 }}>
-                Title *
-              </p>
-              <input
-                className="input"
-                required
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                placeholder="Task name…"
-                disabled={isClient}
-              />
+              <label className="label" style={{ marginBottom: 5 }}>Title *</label>
+              <input className="input" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Task name…" disabled={isClient} />
             </div>
             <div>
-              <p className="label" style={{ marginBottom: 5 }}>
-                Description
-              </p>
-              <textarea
-                className="input"
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                rows={2}
-                style={{ minHeight: 60 }}
-              />
+              <label className="label" style={{ marginBottom: 5 }}>Description</label>
+              <textarea className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} style={{ minHeight: 60 }} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div>
-                <p className="label" style={{ marginBottom: 5 }}>
-                  Priority
-                </p>
-                <select
-                  className="input"
-                  value={form.priority}
-                  onChange={(e) => setForm({ ...form, priority: e.target.value })}
-                >
-                  {PRIS.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
+                <label className="label" style={{ marginBottom: 5 }}>Priority</label>
+                <select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+                  {PRIS.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
               <div>
-                <p className="label" style={{ marginBottom: 5 }}>
-                  Status
-                </p>
-                <select
-                  className="input"
-                  value={form.status}
-                  onChange={(e) => setForm({ ...form, status: e.target.value })}
-                >
-                  {statuses.map((s) => (
-                    <option key={s} value={s}>
-                      {s.replace(/_/g, " ")}
-                    </option>
-                  ))}
+                <label className="label" style={{ marginBottom: 5 }}>Status</label>
+                <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                  {statuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
                 </select>
               </div>
               <div>
-                <p className="label" style={{ marginBottom: 5 }}>
-                  Start Date *
-                </p>
-                <input
-                  className="input"
-                  type="date"
-                  required
-                  value={form.startDate}
-                  onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-                />
+                <label className="label" style={{ marginBottom: 5 }}>Start date *</label>
+                <input className="input" type="date" required value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
               </div>
               <div>
-                <p className="label" style={{ marginBottom: 5 }}>
-                  End Date *
-                </p>
-                <input
-                  className="input"
-                  type="date"
-                  required
-                  value={form.endDate}
-                  onChange={(e) => setForm({ ...form, endDate: e.target.value })}
-                />
+                <label className="label" style={{ marginBottom: 5 }}>End date *</label>
+                <input className="input" type="date" required value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} />
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ flex: 1 }}
-                onClick={onClose}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                style={{ flex: 1 }}
-                disabled={loading}
-              >
-                {loading ? <span className="spinner" style={{ width: 13, height: 13 }} /> : null}
-                {loading ? "Saving…" : task ? "Save Changes" : "Assign"}
+              <button type="button" className="btn btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+              <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={loading}>
+                {loading && <span className="spinner" style={{ width: 13, height: 13, borderTopColor: "rgba(255,255,255,0.7)" }} />}
+                {loading ? "Saving…" : task ? "Save changes" : "Assign"}
               </button>
             </div>
           </form>
@@ -1056,19 +310,17 @@ function TaskModal({
 
 // ── PortalSettings ───────────────────────────────────────────────────────────
 function PortalSettings({
-  employeeId,
-  portalEnabled,
-  onSave,
+  employeeId, portalEnabled, onSave,
 }: {
   employeeId: string;
   portalEnabled: boolean;
   onSave: () => void;
 }) {
-  const [pw, setPw]           = useState("");
+  const [pw, setPw] = useState("");
   const [enabled, setEnabled] = useState(portalEnabled);
-  const [saving, setSaving]   = useState(false);
-  const [saved, setSaved]     = useState(false);
-  const [error, setError]     = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1081,135 +333,49 @@ function PortalSettings({
     });
     const d = await res.json();
     setSaving(false);
-    if (!res.ok) {
-      setError(d.error || "Failed");
-      return;
-    }
+    if (!res.ok) { setError(d.error || "Failed"); return; }
     setSaved(true);
     setPw("");
     setTimeout(() => setSaved(false), 3000);
     onSave();
   }
 
-  const url =
-    typeof window !== "undefined"
-      ? `${window.location.origin}/employee-login`
-      : "/employee-login";
+  const url = typeof window !== "undefined" ? `${window.location.origin}/employee-login` : "/employee-login";
 
   return (
-    <div className="card" style={{ padding: 16, marginTop: 12 }}>
-      <p style={{ fontSize: 12, fontWeight: 500, color: "var(--text-0)", marginBottom: 12 }}>
-        Portal Access
-      </p>
+    <div className="card" style={{ padding: 16 }}>
+      <p style={{ fontSize: 13, fontWeight: 600, color: "var(--tx-primary)", marginBottom: 12 }}>Portal Access</p>
       {error && (
-        <div
-          style={{
-            padding: "6px 10px",
-            background: "rgba(239,68,68,0.08)",
-            border: "1px solid rgba(239,68,68,0.2)",
-            borderRadius: "var(--radius-sm)",
-            color: "#ef4444",
-            fontSize: 11,
-            marginBottom: 10,
-          }}
-        >
-          {error}
-        </div>
+        <div style={{ padding: "6px 10px", background: "var(--red-bg)", borderRadius: "var(--r-sm)", color: "var(--red)", fontSize: 12, marginBottom: 10 }}>{error}</div>
       )}
       {saved && (
-        <div
-          style={{
-            padding: "6px 10px",
-            background: "rgba(255,255,255,0.05)",
-            borderRadius: "var(--radius-sm)",
-            color: "var(--text-1)",
-            fontSize: 11,
-            marginBottom: 10,
-          }}
-        >
-          ✓ Saved
-        </div>
+        <div style={{ padding: "6px 10px", background: "var(--green-bg)", borderRadius: "var(--r-sm)", color: "var(--green)", fontSize: 12, marginBottom: 10 }}>✓ Saved</div>
       )}
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "8px 10px",
-            background: "var(--surface-3)",
-            borderRadius: "var(--radius-sm)",
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", background: "var(--hover-bg)", borderRadius: "var(--r-sm)" }}>
           <div>
-            <p style={{ fontSize: 12, color: "var(--text-1)" }}>Enable Portal</p>
-            <p style={{ fontSize: 10, color: "var(--text-2)", marginTop: 1 }}>
-              {enabled ? "Employee can log in" : "Disabled"}
-            </p>
+            <p style={{ fontSize: 13, color: "var(--tx-primary)" }}>Enable portal</p>
+            <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 1 }}>{enabled ? "Employee can log in" : "Disabled"}</p>
           </div>
           <label className="toggle-wrap">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
             <span className="toggle-slider" />
           </label>
         </div>
         <div>
-          <p className="label" style={{ marginBottom: 5 }}>
-            {portalEnabled ? "Change Password" : "Set Password"}
-          </p>
-          <input
-            className="input"
-            type="password"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-            placeholder={portalEnabled ? "Leave blank to keep current" : "Min 6 characters"}
-          />
+          <label className="label" style={{ marginBottom: 5 }}>{portalEnabled ? "Change password" : "Set password"}</label>
+          <input className="input" type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder={portalEnabled ? "Leave blank to keep current" : "Min 6 characters"} />
         </div>
-        <button
-          type="submit"
-          className="btn btn-primary"
-          disabled={saving}
-          style={{ fontSize: 12 }}
-        >
-          {saving ? <span className="spinner" style={{ width: 12, height: 12 }} /> : null}
-          Save Portal Settings
+        <button type="submit" className="btn btn-primary" disabled={saving} style={{ fontSize: 12.5 }}>
+          {saving && <span className="spinner" style={{ width: 12, height: 12, borderTopColor: "rgba(255,255,255,0.7)" }} />}
+          Save portal settings
         </button>
       </form>
-      <div
-        style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border-0)" }}
-      >
-        <p style={{ fontSize: 10, color: "var(--text-2)", marginBottom: 5 }}>Share this link:</p>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "6px 8px",
-            background: "var(--surface-3)",
-            borderRadius: "var(--radius-sm)",
-          }}
-        >
-          <span
-            style={{
-              fontSize: 10,
-              color: "var(--text-1)",
-              flex: 1,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {url}
-          </span>
-          <button
-            type="button"
-            className="btn-ghost btn-icon"
-            style={{ padding: 3 }}
-            onClick={() => navigator.clipboard.writeText(url)}
-          >
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+        <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginBottom: 5 }}>Portal login link:</p>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", background: "var(--hover-bg)", borderRadius: "var(--r-sm)" }}>
+          <span style={{ fontSize: 11, color: "var(--tx-secondary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</span>
+          <button type="button" className="btn-ghost btn-icon" style={{ padding: 3 }} onClick={() => navigator.clipboard.writeText(url)}>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="9" y="9" width="13" height="13" rx="2" />
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
@@ -1221,26 +387,33 @@ function PortalSettings({
   );
 }
 
-// ── Main Page ────────────────────────────────────────────────────────────────
+// ── Main page ────────────────────────────────────────────────────────────────
 export default function EmployeeDetailPage() {
-  const { id }   = useParams<{ id: string }>();
-  const router   = useRouter();
-  const [employee, setEmployee]       = useState<Employee | null>(null);
-  const [allTasks, setAllTasks]       = useState<Task[]>([]);
-  const [loading, setLoading]         = useState(true);
-  const [taskModal, setTaskModal]     = useState<"add" | "edit" | null>(null);
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+
+  const [employee, setEmployee] = useState<Employee | null>(null);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [attLoading, setAttLoading] = useState(true);
+
+  const [tab, setTab] = useState<TabKey>("overview");
+  const [taskModal, setTaskModal] = useState<"add" | "edit" | null>(null);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [editEmp, setEditEmp]         = useState(false);
-  const [form, setForm]               = useState({ name: "", email: "", phone: "", department: "", position: "", status: "" });
-  const [saving, setSaving]           = useState(false);
-  const [tabSource, setTabSource]     = useState<"all" | "internal" | "client">("all");
 
-  // ── Date range state ──────────────────────────────────────────────────────
-  const [dateFrom, setDateFrom]           = useState("");
-  const [dateTo, setDateTo]               = useState("");
+  const [editEmp, setEditEmp] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", phone: "", department: "", position: "", status: "" });
+  const [saving, setSaving] = useState(false);
 
-  // ── Content type filter ───────────────────────────────────────────────────
+  // Task tab filters
+  const [sourceFilter, setSourceFilter] = useState<"all" | "internal" | "client">("all");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [groupFilter, setGroupFilter] = useState("All");
   const [contentFilter, setContentFilter] = useState<ContentFilterKey>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1248,109 +421,59 @@ export default function EmployeeDetailPage() {
       fetch(`/api/employees/${id}`),
       fetch(`/api/client-tasks?employeeId=${id}`),
     ]);
-    if (!er.ok) {
-      router.push("/dashboard/employees");
-      return;
-    }
+    if (!er.ok) { router.push("/dashboard/employees"); return; }
     const [ed, cd] = await Promise.all([er.json(), cr.json()]);
     setEmployee(ed);
     setForm({
-      name: ed.name,
-      email: ed.email,
-      phone: ed.phone || "",
-      department: ed.department,
-      position: ed.position,
-      status: ed.status,
+      name: ed.name, email: ed.email, phone: ed.phone || "",
+      department: ed.department, position: ed.position, status: ed.status,
     });
-    const internal: Task[] = (ed.tasks || []).map(
-      (t: Omit<Task, "_type" | "client">) => ({ ...t, _type: "internal" as const })
-    );
-    const client: Task[] = (Array.isArray(cd) ? cd : []).map(
-      (t: Task & { client: { id: string; name: string; company?: string } }) => ({
-        ...t,
-        _type: "client" as const,
-      })
-    );
+    const internal: Task[] = (ed.tasks || []).map((t: Omit<Task, "_type" | "client">) => ({ ...t, _type: "internal" as const }));
+    const client: Task[] = (Array.isArray(cd) ? cd : []).map((t: Omit<Task, "_type">) => ({ ...t, _type: "client" as const }));
     setAllTasks([...internal, ...client]);
     setLoading(false);
+
+    // Attendance since joining (capped at the last 365 days)
+    setAttLoading(true);
+    const joined = new Date(ed.joinedAt);
+    const oneYearAgo = new Date();
+    oneYearAgo.setDate(oneYearAgo.getDate() - 365);
+    const from = joined > oneYearAgo ? joined : oneYearAgo;
+    const ar = await fetch(`/api/attendance/${id}?from=${from.toISOString().split("T")[0]}&to=${new Date().toISOString().split("T")[0]}`);
+    const ad = await ar.json();
+    setAttendance(Array.isArray(ad) ? ad : []);
+    setAttLoading(false);
   }, [id, router]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  async function markComplete(task: Task) {
-    const url =
-      task._type === "client"
-        ? `/api/client-tasks/${task.id}`
-        : `/api/tasks/${task.id}`;
-    await fetch(url, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "COMPLETED" }),
-    });
+  async function updateStatus(task: Task, status: string) {
+    const url = task._type === "client" ? `/api/client-tasks/${task.id}` : `/api/tasks/${task.id}`;
+    await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
     load();
   }
-
   async function deleteTask(task: Task) {
-    const url =
-      task._type === "client"
-        ? `/api/client-tasks/${task.id}`
-        : `/api/tasks/${task.id}`;
+    const url = task._type === "client" ? `/api/client-tasks/${task.id}` : `/api/tasks/${task.id}`;
     await fetch(url, { method: "DELETE" });
     load();
   }
-
   async function saveEmployee(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    await fetch(`/api/employees/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
+    await fetch(`/api/employees/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
     setSaving(false);
     setEditEmp(false);
     load();
   }
 
-  // ── Filtering logic ───────────────────────────────────────────────────────
-  const dateFiltered = useMemo(() => {
-    if (!dateFrom && !dateTo) return allTasks;
-    return allTasks.filter((task) => {
-      const start = task.startDate.split("T")[0];
-      const end   = task.endDate.split("T")[0];
-      if (dateFrom && end < dateFrom) return false;
-      if (dateTo && start > dateTo)   return false;
-      return true;
-    });
-  }, [allTasks, dateFrom, dateTo]);
-
-  // Apply content type filter on top of date filter
-  const contentFiltered = useMemo(
-    () =>
-      contentFilter
-        ? dateFiltered.filter((t) => taskMatchesContentFilter(t, contentFilter))
-        : dateFiltered,
-    [dateFiltered, contentFilter]
-  );
-
-  const internal = contentFiltered.filter((t) => t._type === "internal");
-  const client   = contentFiltered.filter((t) => t._type === "client");
-  const visible  =
-    tabSource === "internal"
-      ? internal
-      : tabSource === "client"
-      ? client
-      : contentFiltered;
-
-  // Stats always based on full allTasks for sidebar
-  const totalDone = allTasks.filter((t) => t.status === "COMPLETED").length;
-  const rate      = allTasks.length > 0 ? Math.round((totalDone / allTasks.length) * 100) : 0;
-
-  const dateActive    = !!(dateFrom || dateTo);
-  const contentActive = contentFilter !== null;
-  const anyFilter     = dateActive || contentActive;
+  /** Jump to the Tasks tab pre-filtered — lets you drill into a stat card's tasks */
+  function drillInto(status: string) {
+    setStatusFilter(status);
+    setSourceFilter("all");
+    setGroupFilter("All");
+    setContentFilter(null);
+    setTab("tasks");
+  }
 
   if (loading)
     return (
@@ -1360,587 +483,406 @@ export default function EmployeeDetailPage() {
     );
   if (!employee) return null;
 
+  const now = new Date();
+  const completed = allTasks.filter((t) => t.status === "COMPLETED").length;
+  const pending = allTasks.filter((t) => t.status === "PENDING" || t.status === "IN_PROGRESS").length;
+  const overdue = allTasks.filter((t) => isOverdue(t, now)).length;
+  const rate = allTasks.length > 0 ? Math.round((completed / allTasks.length) * 100) : 0;
+
+  // Attendance summary
+  const attPresent = attendance.filter((a) => a.status === "PRESENT").length;
+  const attAbsent = attendance.filter((a) => a.status === "ABSENT").length;
+  const attHalf = attendance.filter((a) => a.status === "HALF_DAY").length;
+  const attLeave = attendance.filter((a) => a.status === "LEAVE").length;
+  const attHoliday = attendance.filter((a) => a.status === "HOLIDAY").length;
+  const daysWorked = attPresent + attHalf * 0.5;
+  const workableDays = attendance.length - attHoliday;
+  const attendanceRate = workableDays > 0 ? Math.round((daysWorked / workableDays) * 100) : 0;
+
+  // Grouped breakdown (Overview checklist + Tasks tab group filter)
+  const groupMap = new Map<string, Task[]>();
+  for (const t of allTasks) {
+    const key = groupKey(t);
+    groupMap.set(key, [...(groupMap.get(key) || []), t]);
+  }
+  const groups = Array.from(groupMap.entries()).sort((a, b) => b[1].length - a[1].length);
+
+  // Tasks tab filtering
+  const tasksForTable = allTasks.filter((t) => {
+    if (sourceFilter !== "all" && t._type !== sourceFilter) return false;
+    if (groupFilter !== "All" && groupKey(t) !== groupFilter) return false;
+    if (statusFilter === "OVERDUE" ? !isOverdue(t, now) : statusFilter && t.status !== statusFilter) return false;
+    if (!taskMatchesContentFilter(t, contentFilter)) return false;
+    if (dateFrom && t.endDate.split("T")[0] < dateFrom) return false;
+    if (dateTo && t.startDate.split("T")[0] > dateTo) return false;
+    return true;
+  });
+  const anyFilter = !!(statusFilter || contentFilter || dateFrom || dateTo || groupFilter !== "All" || sourceFilter !== "all");
+
   return (
-    <div style={{ padding: "40px 36px", maxWidth: 1200, margin: "0 auto" }}>
-      <Link
-        href="/dashboard/employees"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          color: "var(--text-2)",
-          fontSize: 12,
-          textDecoration: "none",
-          marginBottom: 28,
-        }}
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M19 12H5" />
-          <path d="M12 19l-7-7 7-7" />
-        </svg>
-        Back
-      </Link>
+    <div className="page-section" style={{ maxWidth: 1180 }}>
+      <div className="breadcrumb">
+        <Link href="/dashboard/employees">Employees</Link>
+        <span className="breadcrumb-sep">/</span>
+        <span style={{ color: "var(--tx-primary)" }}>{employee.name}</span>
+      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 20 }}>
-        {/* ── Profile Sidebar ── */}
-        <div>
-          <div className="card" style={{ padding: 20 }}>
-            <div style={{ textAlign: "center", marginBottom: 16 }}>
-              <div
-                className="avatar avatar-lg"
-                style={{ margin: "0 auto 10px", borderRadius: 14 }}
-              >
-                {employee.name
-                  .split(" ")
-                  .map((n) => n[0])
-                  .join("")
-                  .toUpperCase()
-                  .slice(0, 2)}
-              </div>
-              <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text-0)" }}>
-                {employee.name}
-              </p>
-              <p style={{ fontSize: 12, color: "var(--text-2)", marginTop: 2 }}>
-                {employee.position}
-              </p>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 6,
-                  marginTop: 8,
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 10,
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    background: "var(--surface-3)",
-                    border: "1px solid var(--border-2)",
-                    color: "var(--text-1)",
-                  }}
-                >
-                  {employee.department}
-                </span>
-                <span
-                  style={{
-                    fontSize: 10,
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    background: "var(--surface-3)",
-                    border: "1px solid var(--border-2)",
-                    color: "var(--text-2)",
-                  }}
-                >
-                  {employee.status.replace("_", " ")}
-                </span>
-              </div>
-            </div>
-
-            {/* Stats */}
-            <div
-              style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 14 }}
-            >
-              {(
-                [
-                  ["Total", allTasks.length],
-                  ["Done", totalDone],
-                  [
-                    "Internal",
-                    allTasks.filter((t) => t._type === "internal" && t.status === "COMPLETED").length,
-                  ],
-                  [
-                    "Client",
-                    allTasks.filter((t) => t._type === "client" && t.status === "COMPLETED").length,
-                  ],
-                ] as [string, number][]
-              ).map(([l, v]) => (
-                <div
-                  key={l}
-                  style={{
-                    background: "var(--surface-2)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "8px 6px",
-                    textAlign: "center",
-                  }}
-                >
-                  <p
-                    style={{
-                      fontSize: 20,
-                      fontFamily: '"Bebas Neue", sans-serif',
-                      color: "var(--text-0)",
-                      letterSpacing: "0.04em",
-                    }}
-                  >
-                    {v}
-                  </p>
-                  <p
-                    style={{
-                      fontSize: 9,
-                      color: "var(--text-2)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.1em",
-                      marginTop: 1,
-                    }}
-                  >
-                    {l}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                <p style={{ fontSize: 10, color: "var(--text-2)" }}>Completion</p>
-                <p style={{ fontSize: 10, fontWeight: 500, color: "var(--text-0)" }}>{rate}%</p>
-              </div>
-              <div className="progress-track">
-                <div className="progress-fill" style={{ width: `${rate}%` }} />
-              </div>
-            </div>
-
-            {/* Contact / Edit */}
-            {!editEmp ? (
-              <div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" strokeWidth="2">
-                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-                      <polyline points="22,6 12,13 2,6" />
-                    </svg>
-                    <span
-                      style={{
-                        fontSize: 11,
-                        color: "var(--text-2)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {employee.email}
-                    </span>
-                  </div>
-                  {employee.phone && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" strokeWidth="2">
-                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13.5a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.62 2.74h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 10.09a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 21.73 17z" />
-                      </svg>
-                      <span style={{ fontSize: 11, color: "var(--text-2)" }}>{employee.phone}</span>
-                    </div>
-                  )}
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" strokeWidth="2">
-                      <rect x="3" y="4" width="18" height="18" rx="2" />
-                      <line x1="16" y1="2" x2="16" y2="6" />
-                      <line x1="8" y1="2" x2="8" y2="6" />
-                      <line x1="3" y1="10" x2="21" y2="10" />
-                    </svg>
-                    <span style={{ fontSize: 11, color: "var(--text-2)" }}>
-                      Joined {formatDate(employee.joinedAt)}
-                    </span>
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <button
-                    className="btn btn-secondary"
-                    style={{ fontSize: 12 }}
-                    onClick={() => setEditEmp(true)}
-                  >
-                    Edit Profile
-                  </button>
-                  <Link
-                    href={`/dashboard/employees/${id}/attendance`}
-                    className="btn btn-secondary"
-                    style={{ fontSize: 12, textDecoration: "none", justifyContent: "center" }}
-                  >
-                    View Attendance
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <form
-                onSubmit={saveEmployee}
-                style={{ display: "flex", flexDirection: "column", gap: 8 }}
-              >
-                {(
-                  [
-                    { k: "name",     l: "Name",     req: true },
-                    { k: "email",    l: "Email",    req: true },
-                    { k: "phone",    l: "Phone",    req: false },
-                    { k: "position", l: "Position", req: true },
-                  ] as { k: keyof typeof form; l: string; req: boolean }[]
-                ).map(({ k, l, req }) => (
-                  <div key={k}>
-                    <p className="label" style={{ marginBottom: 4 }}>
-                      {l}
-                    </p>
-                    <input
-                      className="input"
-                      required={req}
-                      value={form[k]}
-                      onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-                      style={{ fontSize: 12 }}
-                    />
-                  </div>
-                ))}
-                <div>
-                  <p className="label" style={{ marginBottom: 4 }}>
-                    Department
-                  </p>
-                  <select
-                    className="input"
-                    value={form.department}
-                    onChange={(e) => setForm({ ...form, department: e.target.value })}
-                    style={{ fontSize: 12 }}
-                  >
-                    {DEPTS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <p className="label" style={{ marginBottom: 4 }}>
-                    Status
-                  </p>
-                  <select
-                    className="input"
-                    value={form.status}
-                    onChange={(e) => setForm({ ...form, status: e.target.value })}
-                    style={{ fontSize: 12 }}
-                  >
-                    {STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {s.replace("_", " ")}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ flex: 1, fontSize: 12 }}
-                    onClick={() => setEditEmp(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="btn btn-primary"
-                    style={{ flex: 1, fontSize: 12 }}
-                    disabled={saving}
-                  >
-                    {saving ? "Saving…" : "Save"}
-                  </button>
-                </div>
-              </form>
-            )}
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 16 }} className="anim-up">
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div className="avatar avatar-lg" style={{ background: "linear-gradient(135deg,#7c3aed,#ec4899)", color: "#fff" }}>
+            {employee.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)}
           </div>
-          <PortalSettings
-            employeeId={id}
-            portalEnabled={employee.portalEnabled}
-            onSave={load}
-          />
-        </div>
-
-        {/* ── Tasks Panel ── */}
-        <div className="card" style={{ overflow: "hidden", alignSelf: "start" }}>
-          {/* Header */}
-          <div
-            style={{
-              padding: "14px 20px",
-              borderBottom: "1px solid var(--border-0)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <div>
-              <p className="section-title">Tasks</p>
-              <p style={{ fontSize: 11, color: "var(--text-2)", marginTop: 2 }}>
-                {anyFilter
-                  ? `${visible.filter((t) => t.status === "COMPLETED").length} of ${visible.length} in view`
-                  : `${totalDone} of ${allTasks.length} completed`}
-              </p>
-            </div>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => {
-                setSelectedTask(null);
-                setTaskModal("add");
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              Assign
-            </button>
-          </div>
-
-          {/* Tabs + filter row */}
-          <div
-            style={{
-              padding: "10px 16px",
-              borderBottom: "1px solid var(--border-0)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-              flexWrap: "wrap",
-            }}
-          >
-            <div style={{ display: "flex", gap: 6 }}>
-              {(
-                [
-                  ["all",      "All",      contentFiltered.length],
-                  ["internal", "Internal", internal.length],
-                  ["client",   "Client",   client.length],
-                ] as const
-              ).map(([k, l, c]) => (
-                <button
-                  key={k}
-                  className={`filter-tab${tabSource === k ? " active" : ""}`}
-                  style={{ fontSize: 11, padding: "4px 10px" }}
-                  onClick={() => setTabSource(k)}
-                >
-                  {l} <span className="count">{c}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Right-side filters */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <ContentTypeFilter
-                value={contentFilter}
-                onChange={setContentFilter}
-              />
-              <DateRangeFilter
-                from={dateFrom}
-                to={dateTo}
-                onChange={(f, t) => { setDateFrom(f); setDateTo(t); }}
-                onClear={() => { setDateFrom(""); setDateTo(""); }}
-              />
-            </div>
-          </div>
-
-          {/* Active content-type badge */}
-          {contentActive && (
-            <div
-              style={{
-                padding: "6px 16px",
-                background: "rgba(255,255,255,0.03)",
-                borderBottom: "1px solid var(--border-0)",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" strokeWidth="2">
-                <rect x="2" y="2" width="20" height="20" rx="2" />
-                <path d="M7 2v20M17 2v20M2 12h20" />
-              </svg>
-              <span style={{ fontSize: 10, color: "var(--text-2)" }}>
-                Showing: <span style={{ color: "var(--text-1)", fontWeight: 500 }}>
-                  {CONTENT_FILTERS.find((f) => f.key === contentFilter)?.label}
-                </span>
-                {" "}— {visible.length} task{visible.length !== 1 ? "s" : ""} matched
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <h1 className="page-title" style={{ fontSize: 22 }}>{employee.name}</h1>
+              <span className={`badge ${employee.status === "ACTIVE" ? "badge-green" : employee.status === "ON_LEAVE" ? "badge-amber" : "badge-red"}`}>
+                {employee.status.replace("_", " ")}
               </span>
+              {employee.portalEnabled && <span className="badge badge-blue">Portal enabled</span>}
+            </div>
+            <p style={{ fontSize: 13, color: "var(--tx-tertiary)", marginTop: 3 }}>{employee.position} · {employee.department}</p>
+          </div>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={() => { setSelectedTask(null); setTaskModal("add"); }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+          Assign task
+        </button>
+      </div>
+
+      {/* ── Tabs ───────────────────────────────────────────────────── */}
+      <div className="filter-tabs-wrap anim-up" style={{ marginBottom: 20 }}>
+        {TABS.map((t) => (
+          <button key={t.key} className={`filter-tab${tab === t.key ? " active" : ""}`} onClick={() => setTab(t.key)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Overview ───────────────────────────────────────────────── */}
+      {tab === "overview" && (
+        <div className="tab-fade">
+          {/* Stat cards — click to drill into the matching tasks */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+            {([
+              ["Total tasks", allTasks.length, "var(--accent)", ""],
+              ["Completed", completed, "var(--green)", "COMPLETED"],
+              ["Pending", pending, "var(--amber)", "PENDING"],
+              ["Overdue", overdue, "var(--red)", "OVERDUE"],
+            ] as [string, number, string, string][]).map(([l, v, c, filterKey]) => (
               <button
-                onClick={() => setContentFilter(null)}
-                style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-2)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                key={l}
+                className="stat-card"
+                onClick={() => drillInto(filterKey)}
+                title={`View ${l.toLowerCase()}`}
+                style={{ padding: "14px 16px", textAlign: "left", cursor: "pointer", font: "inherit" }}
               >
-                Clear ✕
+                <p className="label-text" style={{ marginBottom: 8 }}>{l}</p>
+                <p className="stat-value" style={{ fontSize: 22, color: c }}>{v}</p>
               </button>
-            </div>
-          )}
+            ))}
+          </div>
 
-          {/* ── Range Summary (new) ── */}
-          <RangeSummary tasks={visible} from={dateFrom} to={dateTo} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>
+            {/* Checklist view (grouped breakdown) */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="card" style={{ padding: "16px 18px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <p className="section-title">Task Completion</p>
+                  <p style={{ fontSize: 18, fontWeight: 700, color: "var(--accent)" }}>{rate}%</p>
+                </div>
+                <div className="progress-track" style={{ height: 6 }}><div className="progress-fill" style={{ width: `${rate}%` }} /></div>
+              </div>
 
-          {/* Task list */}
-          {visible.length === 0 ? (
-            <div className="empty" style={{ padding: 40 }}>
-              <p style={{ color: "var(--text-2)", fontSize: 12 }}>
-                {contentActive
-                  ? `No tasks found matching "${CONTENT_FILTERS.find((f) => f.key === contentFilter)?.label}"`
-                  : dateActive
-                  ? "No tasks found in this date range"
-                  : tabSource === "client"
-                  ? "No client tasks assigned"
-                  : "No tasks assigned"}
-              </p>
-              {anyFilter && (
-                <button
-                  onClick={() => { setDateFrom(""); setDateTo(""); setContentFilter(null); }}
-                  style={{ marginTop: 8, fontSize: 11, color: "var(--text-2)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}
-                >
-                  Clear all filters
-                </button>
-              )}
-            </div>
-          ) : (
-            <div>
-              {visible.map((task) => {
-                const overdue =
-                  new Date(task.endDate) < new Date() && task.status !== "COMPLETED";
+              {groups.length === 0 ? (
+                <div className="card empty" style={{ padding: 50 }}>
+                  <p style={{ fontWeight: 500, color: "var(--tx-secondary)" }}>No tasks yet</p>
+                  <p style={{ fontSize: 13 }}>Assign the first task to this employee</p>
+                </div>
+              ) : groups.map(([group, groupTasks]) => {
+                const gDone = groupTasks.filter((t) => t.status === "COMPLETED").length;
+                const gPct = Math.round((gDone / groupTasks.length) * 100);
                 return (
-                  <div
-                    key={`${task._type}-${task.id}`}
-                    style={{ padding: "12px 20px", borderBottom: "1px solid var(--border-0)" }}
-                  >
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                      {/* Complete toggle */}
-                      <button
-                        onClick={() => task.status !== "COMPLETED" && markComplete(task)}
-                        style={{
-                          marginTop: 2,
-                          width: 16,
-                          height: 16,
-                          borderRadius: "50%",
-                          border: `1.5px solid ${task.status === "COMPLETED" ? "#fff" : "var(--border-3)"}`,
-                          background: task.status === "COMPLETED" ? "#fff" : "transparent",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          cursor: "pointer",
-                          flexShrink: 0,
-                          transition: "all .15s",
-                        }}
-                      >
-                        {task.status === "COMPLETED" && (
-                          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#060606" strokeWidth="3">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </button>
-
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 6,
-                            flexWrap: "wrap",
-                            marginBottom: 3,
-                          }}
-                        >
-                          <p
-                            style={{
-                              fontSize: 13,
-                              fontWeight: 500,
-                              color:
-                                task.status === "COMPLETED"
-                                  ? "var(--text-2)"
-                                  : "var(--text-0)",
-                              textDecoration:
-                                task.status === "COMPLETED" ? "line-through" : "none",
-                            }}
-                          >
-                            {task.title}
-                          </p>
-                          <span
-                            style={{
-                              fontSize: 9,
-                              textTransform: "uppercase",
-                              letterSpacing: "0.1em",
-                              color: "var(--text-2)",
-                            }}
-                          >
-                            {task.priority}
-                          </span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                            <div
-                              className="dot"
-                              style={{
-                                background: STATUS_DOT[task.status] || "#444",
-                                width: 4,
-                                height: 4,
-                              }}
-                            />
-                            <span
-                              style={{
-                                fontSize: 9,
-                                textTransform: "uppercase",
-                                letterSpacing: "0.1em",
-                                color: STATUS_TXT[task.status] || "var(--text-2)",
-                              }}
-                            >
-                              {task.status.replace(/_/g, " ")}
-                            </span>
-                          </div>
-                          {task._type === "client" && task.client && (
-                            <Link
-                              href={`/dashboard/clients/${task.client.id}`}
-                              style={{
-                                fontSize: 9,
-                                padding: "1px 6px",
-                                borderRadius: 999,
-                                background: "rgba(255,255,255,0.06)",
-                                border: "1px solid rgba(255,255,255,0.1)",
-                                color: "var(--text-1)",
-                                textDecoration: "none",
-                              }}
-                            >
-                              {task.client.company || task.client.name}
-                            </Link>
-                          )}
-                        </div>
-                        {task.description && (
-                          <p style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 3 }}>
-                            {task.description}
-                          </p>
-                        )}
-                        <p style={{ fontSize: 10, color: "var(--text-2)" }}>
-                          {formatDate(task.startDate)} →{" "}
-                          <span style={{ color: overdue ? "#ef4444" : "var(--text-2)" }}>
-                            {formatDate(task.endDate)}
-                            {overdue ? " ⚠" : ""}
-                          </span>
-                          {task.completedAt && (
-                            <span style={{ color: "var(--text-0)", marginLeft: 6 }}>
-                              ✓ {formatDate(task.completedAt)}
-                            </span>
-                          )}
-                        </p>
+                  <div key={group} className="card" style={{ overflow: "hidden" }}>
+                    <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--border)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <p style={{ fontSize: 13.5, fontWeight: 600, color: "var(--tx-primary)" }}>{groupEmoji(group)} {group}</p>
+                        <p style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>{gDone}/{groupTasks.length} done</p>
                       </div>
-
-                      <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-                        <button
-                          className="btn-ghost btn-icon"
-                          onClick={() => {
-                            setSelectedTask(task);
-                            setTaskModal("edit");
-                          }}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                          </svg>
-                        </button>
-                        <button
-                          className="btn-ghost btn-icon"
-                          onClick={() => deleteTask(task)}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6l-1 14H6L5 6" />
-                            <path d="M10 11v6M14 11v6M9 6V4h6v2" />
-                          </svg>
-                        </button>
-                      </div>
+                      <div className="progress-track" style={{ height: 5 }}><div className="progress-fill" style={{ width: `${gPct}%` }} /></div>
                     </div>
+                    {groupTasks.map((t) => {
+                      const tOverdue = isOverdue(t, now);
+                      return (
+                        <button
+                          key={`${t._type}-${t.id}`}
+                          onClick={() => setDetailTask(t)}
+                          title="View task details"
+                          className="checklist-row"
+                          style={{
+                            display: "flex", alignItems: "center", gap: 10, width: "100%",
+                            padding: "9px 18px",
+                            background: "transparent",
+                            border: "none", borderBottom: "1px solid var(--border)",
+                            cursor: "pointer", textAlign: "left", font: "inherit",
+                          }}
+                        >
+                          <span style={{
+                            width: 16, height: 16, borderRadius: "50%", flexShrink: 0,
+                            border: t.status === "COMPLETED" ? "none" : "1.5px solid var(--border-md)",
+                            background: t.status === "COMPLETED" ? "var(--green)" : "transparent",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}>
+                            {t.status === "COMPLETED" && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
+                          </span>
+                          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: t.status === "COMPLETED" ? "var(--tx-tertiary)" : "var(--tx-primary)", textDecoration: t.status === "COMPLETED" ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {t.title}
+                          </span>
+                          {t.client && (
+                            <span className="badge badge-purple" style={{ flexShrink: 0, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {t.client.company || t.client.name}
+                            </span>
+                          )}
+                          <span className={`badge ${tOverdue ? "badge-red" : S_BADGE[t.status] || "badge-gray"}`} style={{ flexShrink: 0 }}>
+                            {tOverdue ? "Overdue" : S_LABEL[t.status] || t.status}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 );
               })}
             </div>
+
+            {/* Right rail: employee info + portal */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="card" style={{ padding: 18 }}>
+                {!editEmp ? (
+                  <div>
+                    <p className="section-title" style={{ marginBottom: 10 }}>Employee Info</p>
+                    {([
+                      ["Email", employee.email],
+                      ["Phone", employee.phone],
+                      ["Department", employee.department],
+                      ["Position", employee.position],
+                      ["Joined", formatDate(employee.joinedAt)],
+                    ] as [string, string | undefined][]).filter(([, v]) => v).map(([l, v]) => (
+                      <div key={l} className="property-row">
+                        <span className="property-label">{l}</span>
+                        <span className="property-value" style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+                      </div>
+                    ))}
+                    <button className="btn btn-secondary" style={{ width: "100%", marginTop: 10, fontSize: 12.5 }} onClick={() => setEditEmp(true)}>Edit employee</button>
+                    <Link href={`/dashboard/employees/${id}/attendance`} className="btn btn-secondary" style={{ width: "100%", marginTop: 6, fontSize: 12.5, textDecoration: "none", justifyContent: "center" }}>
+                      Attendance calendar
+                    </Link>
+                  </div>
+                ) : (
+                  <form onSubmit={saveEmployee} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {([
+                      { k: "name", l: "Name", req: true },
+                      { k: "email", l: "Email", req: true },
+                      { k: "phone", l: "Phone", req: false },
+                      { k: "position", l: "Position", req: true },
+                    ] as { k: keyof typeof form; l: string; req: boolean }[]).map(({ k, l, req }) => (
+                      <div key={k}>
+                        <label className="label" style={{ marginBottom: 4 }}>{l}</label>
+                        <input className="input" required={req} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} style={{ fontSize: 12.5 }} />
+                      </div>
+                    ))}
+                    <div>
+                      <label className="label" style={{ marginBottom: 4 }}>Department</label>
+                      <select className="input" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} style={{ fontSize: 12.5 }}>
+                        {DEPTS.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label" style={{ marginBottom: 4 }}>Status</label>
+                      <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} style={{ fontSize: 12.5 }}>
+                        {STATUSES.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                      <button type="button" className="btn btn-secondary" style={{ flex: 1, fontSize: 12 }} onClick={() => setEditEmp(false)}>Cancel</button>
+                      <button type="submit" className="btn btn-primary" style={{ flex: 1, fontSize: 12 }} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+                    </div>
+                  </form>
+                )}
+              </div>
+              <PortalSettings employeeId={id} portalEnabled={employee.portalEnabled} onSave={load} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tasks ──────────────────────────────────────────────────── */}
+      {tab === "tasks" && (
+        <div className="card tab-fade" style={{ overflow: "hidden" }}>
+          <div style={{ padding: "13px 18px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div className="filter-tabs-wrap" style={{ marginRight: "auto" }}>
+                <button className={`filter-tab${groupFilter === "All" ? " active" : ""}`} onClick={() => setGroupFilter("All")}>
+                  All <span className="count">{allTasks.length}</span>
+                </button>
+                {groups.map(([group, groupTasks]) => (
+                  <button key={group} className={`filter-tab${groupFilter === group ? " active" : ""}`} onClick={() => setGroupFilter(group)}>
+                    {groupEmoji(group)} {group} <span className="count">{groupTasks.length}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="filter-tabs-wrap">
+                {([["", "All status"], ["PENDING", "Pending"], ["IN_PROGRESS", "Active"], ["COMPLETED", "Done"], ["CHANGES_REQUIRED", "Changes"], ["OVERDUE", "Overdue"]] as [string, string][]).map(([k, l]) => (
+                  <button key={k} className={`filter-tab${statusFilter === k ? " active" : ""}`} onClick={() => setStatusFilter(k)}>{l}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div className="filter-tabs-wrap" style={{ marginRight: "auto" }}>
+                {([["all", "All sources"], ["internal", "Internal"], ["client", "Client"]] as const).map(([k, l]) => (
+                  <button key={k} className={`filter-tab${sourceFilter === k ? " active" : ""}`} onClick={() => setSourceFilter(k)}>{l}</button>
+                ))}
+              </div>
+              <select className="input" value={contentFilter ?? ""} onChange={(e) => setContentFilter((e.target.value || null) as ContentFilterKey)} style={{ width: "auto", maxWidth: 165, fontSize: 12.5 }}>
+                <option value="">All content types</option>
+                {CONTENT_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+              <input className="input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: "auto", fontSize: 12.5 }} title="Due on or after" />
+              <input className="input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: "auto", fontSize: 12.5 }} title="Starting on or before" />
+              {anyFilter && (
+                <button className="btn btn-secondary btn-sm" onClick={() => { setStatusFilter(""); setContentFilter(null); setDateFrom(""); setDateTo(""); setGroupFilter("All"); setSourceFilter("all"); }}>
+                  Clear filters
+                </button>
+              )}
+            </div>
+          </div>
+
+          {tasksForTable.length === 0 ? (
+            <div className="empty" style={{ padding: 40 }}>
+              <p style={{ fontWeight: 500, color: "var(--tx-secondary)" }}>No tasks</p>
+              <p style={{ fontSize: 13 }}>{anyFilter ? "No tasks match the current filters" : "Assign the first task to this employee"}</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Task</th><th>Category</th><th>Client</th><th>Due date</th><th>Priority</th><th>Status</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {tasksForTable.map((task) => {
+                    const tOverdue = isOverdue(task, now);
+                    return (
+                      <tr key={`${task._type}-${task.id}`} onClick={() => setDetailTask(task)} title="View task details">
+                        <td style={{ maxWidth: 220 }}>
+                          <p style={{ fontSize: 13, fontWeight: 500, color: task.status === "COMPLETED" ? "var(--tx-tertiary)" : "var(--tx-primary)", textDecoration: task.status === "COMPLETED" ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {task.title}
+                          </p>
+                          {task.taskType && <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.taskType}</p>}
+                          {task.completedAt && <p style={{ fontSize: 11.5, color: "var(--green)" }}>✓ {formatDate(task.completedAt)}</p>}
+                        </td>
+                        <td>
+                          {task.category
+                            ? <TaskCategoryBadge category={task.category} compact />
+                            : <span className="badge badge-gray">Internal</span>}
+                        </td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {task.client ? (
+                            <Link href={`/dashboard/clients/${task.client.id}`} style={{ fontSize: 12.5, color: "var(--accent)", textDecoration: "none", whiteSpace: "nowrap" }}>
+                              {task.client.company || task.client.name}
+                            </Link>
+                          ) : <span style={{ fontSize: 12, color: "var(--tx-tertiary)" }}>—</span>}
+                        </td>
+                        <td style={{ fontSize: 12.5, color: tOverdue ? "var(--red)" : "var(--tx-secondary)", whiteSpace: "nowrap" }}>
+                          {formatDate(task.endDate)}{tOverdue ? " ⚠" : ""}
+                        </td>
+                        <td><span className="badge badge-gray">{task.priority}</span></td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <select value={task.status} onChange={(e) => updateStatus(task, e.target.value)} className="input" style={{ width: "auto", padding: "4px 8px", fontSize: 11.5, height: "auto" }}>
+                            {(task._type === "client" ? CLI_S : INT_S).map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
+                          </select>
+                        </td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+                            <button className="btn-ghost btn-icon" title="View details" onClick={() => setDetailTask(task)}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+                            </button>
+                            <button className="btn-ghost btn-icon" title="Edit" onClick={() => { setSelectedTask(task); setTaskModal("edit"); }}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                            </button>
+                            <button className="btn-ghost btn-icon" title="Delete" onClick={() => deleteTask(task)}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6M9 6V4h6v2" /></svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
-      </div>
+      )}
+
+      {/* ── Attendance ─────────────────────────────────────────────── */}
+      {tab === "attendance" && (
+        <div className="tab-fade" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            <div className="stat-card" style={{ padding: "16px 18px" }}>
+              <p className="label-text" style={{ marginBottom: 8 }}>Days worked</p>
+              <p className="stat-value" style={{ fontSize: 26, color: "var(--green)" }}>{attLoading ? "…" : daysWorked}</p>
+              <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 4 }}>of {workableDays} working days</p>
+            </div>
+            <div className="stat-card" style={{ padding: "16px 18px" }}>
+              <p className="label-text" style={{ marginBottom: 8 }}>Attendance rate</p>
+              <p className="stat-value" style={{ fontSize: 26, color: "var(--accent)" }}>{attLoading ? "…" : `${attendanceRate}%`}</p>
+              <div className="progress-track" style={{ height: 5, marginTop: 8 }}><div className="progress-fill" style={{ width: `${attendanceRate}%` }} /></div>
+            </div>
+            <div className="stat-card" style={{ padding: "16px 18px" }}>
+              <p className="label-text" style={{ marginBottom: 8 }}>Leaves taken</p>
+              <p className="stat-value" style={{ fontSize: 26, color: "var(--amber)" }}>{attLoading ? "…" : attLeave}</p>
+              <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 4 }}>since {formatDate(employee.joinedAt)}</p>
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: "16px 18px" }}>
+            <p className="section-title" style={{ marginBottom: 14 }}>Breakdown</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+              {([
+                ["Present", attPresent, "var(--green)"],
+                ["Absent", attAbsent, "var(--red)"],
+                ["Half day", attHalf, "var(--tx-secondary)"],
+                ["Leave", attLeave, "var(--amber)"],
+                ["Holiday", attHoliday, "var(--blue)"],
+              ] as [string, number, string][]).map(([l, v, c]) => (
+                <div key={l} style={{ background: "var(--hover-bg)", borderRadius: "var(--r-md)", padding: "12px 8px", textAlign: "center" }}>
+                  <p style={{ fontSize: 20, fontWeight: 700, color: c, letterSpacing: "-0.02em" }}>{attLoading ? "…" : v}</p>
+                  <p style={{ fontSize: 11, color: "var(--tx-tertiary)", marginTop: 3 }}>{l}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: "20px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+            <div>
+              <p style={{ fontSize: 13.5, fontWeight: 600, color: "var(--tx-primary)", marginBottom: 3 }}>Want the full calendar view?</p>
+              <p style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Mark daily attendance and browse any month</p>
+            </div>
+            <Link href={`/dashboard/employees/${id}/attendance`} className="btn btn-primary btn-sm" style={{ textDecoration: "none", flexShrink: 0 }}>
+              Open calendar
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {detailTask && (
+        <TaskDetailModal
+          task={detailTask}
+          onClose={() => setDetailTask(null)}
+          onEdit={() => { setSelectedTask(detailTask); setDetailTask(null); setTaskModal("edit"); }}
+          onComplete={async () => { await updateStatus(detailTask, "COMPLETED"); setDetailTask(null); }}
+        />
+      )}
 
       {(taskModal === "add" || taskModal === "edit") && (
         <TaskModal

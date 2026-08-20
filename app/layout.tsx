@@ -3,8 +3,8 @@ import "./globals.css";
 import Script from "next/script";
 
 export const metadata: Metadata = {
-  title: "EmpAdmin",
-  description: "Employee management dashboard",
+  title: "GrowthZee CRM",
+  description: "Team, client and task operations for growing agencies",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

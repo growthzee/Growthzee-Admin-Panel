@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
       },
       include: {
         tasks: {
-          select: { id: true, status: true, title: true, priority: true, startDate: true, endDate: true },
+          select: { id: true, status: true, title: true, priority: true, startDate: true, endDate: true, completedAt: true },
         },
       },
       orderBy: { createdAt: "desc" },

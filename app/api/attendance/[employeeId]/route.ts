@@ -13,11 +13,21 @@ export async function GET(
 
   const { employeeId } = await params;
   const { searchParams } = new URL(request.url);
-  const year  = parseInt(searchParams.get("year")  || String(new Date().getFullYear()));
-  const month = parseInt(searchParams.get("month") || String(new Date().getMonth() + 1));
+  const fromParam = searchParams.get("from");
+  const toParam   = searchParams.get("to");
 
-  const startDate = new Date(year, month - 1, 1);
-  const endDate   = new Date(year, month, 0); // last day of month
+  let startDate: Date;
+  let endDate: Date;
+  if (fromParam && toParam) {
+    // Explicit date-range query (e.g. for lifetime attendance summaries)
+    startDate = new Date(fromParam);
+    endDate = new Date(toParam);
+  } else {
+    const year  = parseInt(searchParams.get("year")  || String(new Date().getFullYear()));
+    const month = parseInt(searchParams.get("month") || String(new Date().getMonth() + 1));
+    startDate = new Date(year, month - 1, 1);
+    endDate   = new Date(year, month, 0); // last day of month
+  }
 
   try {
     const records = await prisma.attendance.findMany({

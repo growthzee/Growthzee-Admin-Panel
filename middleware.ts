@@ -89,10 +89,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // ── Employee portal API (me, tasks) — requires employee-token ─────────────
+  // ── Employee portal API (me, tasks, leave) — requires employee-token ──────
   if (
     pathname.startsWith("/api/employee-portal/me") ||
-    pathname.startsWith("/api/employee-portal/tasks")
+    pathname.startsWith("/api/employee-portal/tasks") ||
+    pathname.startsWith("/api/employee-portal/leave-requests")
   ) {
     if (!employeeToken) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const p = await verifyToken(employeeToken);
@@ -114,7 +115,8 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/api/tasks") ||
     pathname.startsWith("/api/clients") ||
     pathname.startsWith("/api/client-tasks") ||
-    pathname.startsWith("/api/attendance")
+    pathname.startsWith("/api/attendance") ||
+    pathname.startsWith("/api/leave-requests")
   ) {
     if (!adminToken) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (!await verifyToken(adminToken)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
