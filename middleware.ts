@@ -121,7 +121,8 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/api/leave-requests") ||
     pathname.startsWith("/api/invoices") ||
     pathname.startsWith("/api/monthly-targets") ||
-    pathname.startsWith("/api/work-links")
+    pathname.startsWith("/api/work-links") ||
+    pathname.startsWith("/api/company-profile")
   ) {
     if (!adminToken) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (!await verifyToken(adminToken)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

@@ -9,6 +9,9 @@ import {
   MONTHS as BILLING_MONTHS,
   money,
   invoiceTotals,
+  computeInvoice,
+  amountInWords,
+  TAX_MODES,
   INVOICE_STATUS_BADGE,
   INVOICE_STATUS_LABEL,
 } from "@/lib/billing";
@@ -931,7 +934,7 @@ function TargetsTab({ clientId, tasks }: { clientId: string; tasks: ClientTask[]
 }
 
 /** Raise and manage invoices for this client */
-function InvoicesTab({ clientId }: { clientId: string }) {
+function InvoicesTab({ clientId, client }: { clientId: string; client: Client }) {
   const now = new Date();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1024,6 +1027,7 @@ function InvoicesTab({ clientId }: { clientId: string }) {
       {showForm && (
         <InvoiceForm
           clientId={clientId}
+          client={client}
           defaultYear={now.getFullYear()}
           defaultMonth={now.getMonth() + 1}
           onClose={() => setShowForm(false)}
@@ -1034,29 +1038,76 @@ function InvoicesTab({ clientId }: { clientId: string }) {
   );
 }
 
-function InvoiceForm({ clientId, defaultYear, defaultMonth, onClose, onSaved }: {
-  clientId: string; defaultYear: number; defaultMonth: number;
+type LineItem = { description: string; hsnCode: string; quantity: string; unitPrice: string };
+
+function InvoiceForm({ clientId, client, defaultYear, defaultMonth, onClose, onSaved }: {
+  clientId: string;
+  client: Client;
+  defaultYear: number; defaultMonth: number;
   onClose: () => void; onSaved: () => void;
 }) {
   const today = new Date();
   const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const [issueDate, setIssueDate] = useState(iso(today));
-  const [dueDate, setDueDate] = useState("");
-  const [periodYear, setPeriodYear] = useState(defaultYear);
-  const [periodMonth, setPeriodMonth] = useState(defaultMonth);
-  const [currency, setCurrency] = useState("INR");
-  const [taxPercent, setTaxPercent] = useState("0");
-  const [notes, setNotes] = useState("");
-  const [items, setItems] = useState<{ description: string; quantity: string; unitPrice: string }[]>([
-    { description: "", quantity: "1", unitPrice: "" },
-  ]);
+
+  const [f, setF] = useState({
+    issueDate: iso(today), dueDate: "", periodYear: defaultYear, periodMonth: defaultMonth,
+    currency: "INR", notes: "",
+    // seller
+    sellerName: "", sellerAddress: "", sellerGstin: "", sellerPan: "",
+    sellerPhone: "", sellerEmail: "", sellerWebsite: "",
+    // buyer
+    buyerGstin: "", buyerAddress: "", placeOfSupply: "",
+    // tax
+    taxMode: "GST_SPLIT", taxPercent: "0", cgstPercent: "9", sgstPercent: "9", igstPercent: "18",
+    // adjustments
+    discount: "0", roundOff: "0",
+    // references
+    poNumber: "", projectRef: "",
+    // terms
+    paymentTerms: "", lateFeeNote: "", signatureName: "",
+    // bank
+    bankName: "", bankAccountName: "", bankAccountNumber: "", bankIfsc: "", bankBranch: "", upiId: "",
+  });
+  const [items, setItems] = useState<LineItem[]>([{ description: "", hsnCode: "", quantity: "1", unitPrice: "" }]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) { setF((cur) => ({ ...cur, [k]: v })); }
+
+  // Prefill the seller / bank / terms blocks from the saved company profile
+  useEffect(() => {
+    (async () => {
+      const res = await fetch("/api/company-profile");
+      if (!res.ok) return;
+      const p = await res.json();
+      setF((cur) => ({
+        ...cur,
+        sellerName: p.name || "", sellerAddress: p.address || "", sellerGstin: p.gstin || "",
+        sellerPan: p.pan || "", sellerPhone: p.phone || "", sellerEmail: p.email || "",
+        sellerWebsite: p.website || "",
+        bankName: p.bankName || "", bankAccountName: p.bankAccountName || "",
+        bankAccountNumber: p.bankAccountNumber || "", bankIfsc: p.bankIfsc || "",
+        bankBranch: p.bankBranch || "", upiId: p.upiId || "",
+        paymentTerms: p.paymentTerms || "", lateFeeNote: p.lateFeeNote || "",
+        signatureName: p.signatureName || "",
+        taxMode: p.defaultTaxMode || "GST_SPLIT",
+        cgstPercent: String(p.defaultCgst ?? 9), sgstPercent: String(p.defaultSgst ?? 9),
+        igstPercent: String(p.defaultIgst ?? 18),
+        currency: p.defaultCurrency || "INR",
+        buyerAddress: client.notes ? "" : "",
+      }));
+    })();
+  }, [client]);
 
   const parsed = items.map((i) => ({ quantity: Number(i.quantity) || 0, unitPrice: Number(i.unitPrice) || 0 }));
-  const { subtotal, tax, total } = invoiceTotals(parsed, Number(taxPercent) || 0);
+  const calc = computeInvoice(parsed, {
+    taxMode: f.taxMode, taxPercent: Number(f.taxPercent), cgstPercent: Number(f.cgstPercent),
+    sgstPercent: Number(f.sgstPercent), igstPercent: Number(f.igstPercent),
+    discount: Number(f.discount), roundOff: Number(f.roundOff),
+  });
 
-  function updateItem(idx: number, field: "description" | "quantity" | "unitPrice", val: string) {
+  function updateItem(idx: number, field: keyof LineItem, val: string) {
     setItems((cur) => cur.map((it, i) => (i === idx ? { ...it, [field]: val } : it)));
   }
 
@@ -1068,12 +1119,21 @@ function InvoiceForm({ clientId, defaultYear, defaultMonth, onClose, onSaved }: 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          clientId, issueDate, dueDate: dueDate || null,
-          periodYear, periodMonth, currency,
-          taxPercent: Number(taxPercent) || 0, notes,
+          ...f,
+          clientId,
+          dueDate: f.dueDate || null,
+          taxPercent: Number(f.taxPercent) || 0,
+          cgstPercent: Number(f.cgstPercent) || 0,
+          sgstPercent: Number(f.sgstPercent) || 0,
+          igstPercent: Number(f.igstPercent) || 0,
+          discount: Number(f.discount) || 0,
+          roundOff: Number(f.roundOff) || 0,
           items: items
             .filter((i) => i.description.trim())
-            .map((i) => ({ description: i.description, quantity: Number(i.quantity) || 1, unitPrice: Number(i.unitPrice) || 0 })),
+            .map((i) => ({
+              description: i.description, hsnCode: i.hsnCode,
+              quantity: Number(i.quantity) || 1, unitPrice: Number(i.unitPrice) || 0,
+            })),
         }),
       });
       const d = await res.json();
@@ -1084,10 +1144,23 @@ function InvoiceForm({ clientId, defaultYear, defaultMonth, onClose, onSaved }: 
     } finally { setSaving(false); }
   }
 
+  const field = (k: keyof typeof f, label: string, placeholder = "", type = "text") => (
+    <div>
+      <label className="label" style={{ marginBottom: 5 }}>{label}</label>
+      <input className="input" type={type} value={f[k] as string} placeholder={placeholder}
+        onChange={(e) => set(k, e.target.value as (typeof f)[typeof k])} />
+    </div>
+  );
+
   return (
     <div className="card" style={{ padding: 18 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <p className="section-title">New invoice</p>
+        <div>
+          <p className="section-title">New invoice</p>
+          <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 2 }}>
+            Company, bank and terms are prefilled from Settings
+          </p>
+        </div>
         <button className="btn-ghost btn-icon" onClick={onClose}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
         </button>
@@ -1097,68 +1170,193 @@ function InvoiceForm({ clientId, defaultYear, defaultMonth, onClose, onSaved }: 
         <div style={{ padding: "9px 12px", background: "var(--red-bg)", borderRadius: "var(--r-md)", color: "var(--red)", fontSize: 13, marginBottom: 14 }}>{error}</div>
       )}
 
-      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-          <div>
-            <label className="label" style={{ marginBottom: 5 }}>Invoice date *</label>
-            <input className="input" type="date" required value={issueDate} onChange={(e) => setIssueDate(e.target.value)} />
-          </div>
-          <div>
-            <label className="label" style={{ marginBottom: 5 }}>Due date</label>
-            <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-          </div>
-          <div>
-            <label className="label" style={{ marginBottom: 5 }}>Currency</label>
-            <select className="input" value={currency} onChange={(e) => setCurrency(e.target.value)}>
-              {["INR", "USD", "EUR", "GBP", "AED"].map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label" style={{ marginBottom: 5 }}>Billing month</label>
-            <select className="input" value={periodMonth} onChange={(e) => setPeriodMonth(Number(e.target.value))}>
-              {BILLING_MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label" style={{ marginBottom: 5 }}>Billing year</label>
-            <input className="input" type="number" value={periodYear} onChange={(e) => setPeriodYear(Number(e.target.value))} />
-          </div>
-          <div>
-            <label className="label" style={{ marginBottom: 5 }}>Tax %</label>
-            <input className="input" type="number" min={0} step="0.01" value={taxPercent} onChange={(e) => setTaxPercent(e.target.value)} />
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* ── Invoice basics ── */}
+        <div>
+          <p className="label-text" style={{ marginBottom: 8 }}>Invoice details</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Invoice date *</label>
+              <input className="input" type="date" required value={f.issueDate} onChange={(e) => set("issueDate", e.target.value)} />
+            </div>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Due date</label>
+              <input className="input" type="date" value={f.dueDate} onChange={(e) => set("dueDate", e.target.value)} />
+            </div>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Billing month</label>
+              <select className="input" value={f.periodMonth} onChange={(e) => set("periodMonth", Number(e.target.value))}>
+                {BILLING_MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Billing year</label>
+              <input className="input" type="number" value={f.periodYear} onChange={(e) => set("periodYear", Number(e.target.value))} />
+            </div>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Currency</label>
+              <select className="input" value={f.currency} onChange={(e) => set("currency", e.target.value)}>
+                {["INR", "USD", "EUR", "GBP", "AED"].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            {field("poNumber", "PO number", "PO-2026-014")}
+            <div style={{ gridColumn: "span 2" }}>{field("projectRef", "Project / campaign ref", "August retainer")}</div>
           </div>
         </div>
 
+        {/* ── Buyer ── */}
         <div>
-          <label className="label" style={{ marginBottom: 6 }}>Line items *</label>
+          <p className="label-text" style={{ marginBottom: 8 }}>Bill to — {client.company || client.name}</p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {field("buyerGstin", "Client GSTIN", "22AAAAA0000A1Z5")}
+            {field("placeOfSupply", "Place of supply", "Karnataka (29)")}
+            <div style={{ gridColumn: "1/-1" }}>
+              <label className="label" style={{ marginBottom: 5 }}>Client billing address</label>
+              <textarea className="input" rows={2} style={{ minHeight: 52 }} value={f.buyerAddress}
+                onChange={(e) => set("buyerAddress", e.target.value)} placeholder="Street, city, state, PIN" />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Line items ── */}
+        <div>
+          <p className="label-text" style={{ marginBottom: 8 }}>Line items *</p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 80px 120px 30px", gap: 7, marginBottom: 5 }}>
+            {["Description", "HSN / SAC", "Qty", "Rate", ""].map((h) => (
+              <span key={h} style={{ fontSize: 10.5, color: "var(--tx-tertiary)", fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase" }}>{h}</span>
+            ))}
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
             {items.map((item, idx) => (
-              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 80px 120px 30px", gap: 7 }}>
+              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 110px 80px 120px 30px", gap: 7 }}>
                 <input className="input" placeholder="Description" value={item.description} onChange={(e) => updateItem(idx, "description", e.target.value)} />
-                <input className="input" type="number" min={0} step="0.01" placeholder="Qty" value={item.quantity} onChange={(e) => updateItem(idx, "quantity", e.target.value)} />
-                <input className="input" type="number" min={0} step="0.01" placeholder="Rate" value={item.unitPrice} onChange={(e) => updateItem(idx, "unitPrice", e.target.value)} />
+                <input className="input" placeholder="998365" value={item.hsnCode} onChange={(e) => updateItem(idx, "hsnCode", e.target.value)} />
+                <input className="input" type="number" min={0} step="0.01" value={item.quantity} onChange={(e) => updateItem(idx, "quantity", e.target.value)} />
+                <input className="input" type="number" min={0} step="0.01" placeholder="0.00" value={item.unitPrice} onChange={(e) => updateItem(idx, "unitPrice", e.target.value)} />
                 <button type="button" className="btn btn-secondary" style={{ padding: 0 }} title="Remove line"
-                  onClick={() => setItems((cur) => (cur.length === 1 ? cur : cur.filter((_, i) => i !== idx)))}>
-                  ×
-                </button>
+                  onClick={() => setItems((cur) => (cur.length === 1 ? cur : cur.filter((_, i) => i !== idx)))}>×</button>
               </div>
             ))}
           </div>
           <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: 8 }}
-            onClick={() => setItems((cur) => [...cur, { description: "", quantity: "1", unitPrice: "" }])}>
+            onClick={() => setItems((cur) => [...cur, { description: "", hsnCode: "", quantity: "1", unitPrice: "" }])}>
             + Add line
           </button>
         </div>
 
+        {/* ── Tax & adjustments ── */}
         <div>
-          <label className="label" style={{ marginBottom: 5 }}>Notes</label>
-          <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={{ minHeight: 56 }} placeholder="Payment terms, bank details…" />
+          <p className="label-text" style={{ marginBottom: 8 }}>Tax &amp; adjustments</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            <div style={{ gridColumn: "span 2" }}>
+              <label className="label" style={{ marginBottom: 5 }}>Tax mode</label>
+              <select className="input" value={f.taxMode} onChange={(e) => set("taxMode", e.target.value)}>
+                {TAX_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </div>
+            {f.taxMode === "GST_SPLIT" && (
+              <>
+                <div>
+                  <label className="label" style={{ marginBottom: 5 }}>CGST %</label>
+                  <input className="input" type="number" min={0} step="0.01" value={f.cgstPercent} onChange={(e) => set("cgstPercent", e.target.value)} />
+                </div>
+                <div>
+                  <label className="label" style={{ marginBottom: 5 }}>SGST %</label>
+                  <input className="input" type="number" min={0} step="0.01" value={f.sgstPercent} onChange={(e) => set("sgstPercent", e.target.value)} />
+                </div>
+              </>
+            )}
+            {f.taxMode === "IGST" && (
+              <div style={{ gridColumn: "span 2" }}>
+                <label className="label" style={{ marginBottom: 5 }}>IGST %</label>
+                <input className="input" type="number" min={0} step="0.01" value={f.igstPercent} onChange={(e) => set("igstPercent", e.target.value)} />
+              </div>
+            )}
+            {f.taxMode === "SIMPLE" && (
+              <div style={{ gridColumn: "span 2" }}>
+                <label className="label" style={{ marginBottom: 5 }}>Tax %</label>
+                <input className="input" type="number" min={0} step="0.01" value={f.taxPercent} onChange={(e) => set("taxPercent", e.target.value)} />
+              </div>
+            )}
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Discount ({f.currency})</label>
+              <input className="input" type="number" min={0} step="0.01" value={f.discount} onChange={(e) => set("discount", e.target.value)} />
+            </div>
+            <div>
+              <label className="label" style={{ marginBottom: 5 }}>Round off</label>
+              <input className="input" type="number" step="0.01" value={f.roundOff} onChange={(e) => set("roundOff", e.target.value)} />
+            </div>
+          </div>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 22, padding: "10px 12px", background: "var(--hover-bg)", borderRadius: "var(--r-md)" }}>
-          <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Subtotal <strong style={{ color: "var(--tx-primary)" }}>{money(subtotal, currency)}</strong></span>
-          <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Tax <strong style={{ color: "var(--tx-primary)" }}>{money(tax, currency)}</strong></span>
-          <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--accent)" }}>Total {money(total, currency)}</span>
+        {/* ── Totals preview ── */}
+        <div style={{ padding: "12px 14px", background: "var(--hover-bg)", borderRadius: "var(--r-md)" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 18 }}>
+            <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Subtotal <strong style={{ color: "var(--tx-primary)" }}>{money(calc.subtotal, f.currency)}</strong></span>
+            {calc.discount > 0 && <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Discount <strong style={{ color: "var(--red)" }}>−{money(calc.discount, f.currency)}</strong></span>}
+            {calc.cgst > 0 && <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>CGST <strong style={{ color: "var(--tx-primary)" }}>{money(calc.cgst, f.currency)}</strong></span>}
+            {calc.sgst > 0 && <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>SGST <strong style={{ color: "var(--tx-primary)" }}>{money(calc.sgst, f.currency)}</strong></span>}
+            {calc.igst > 0 && <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>IGST <strong style={{ color: "var(--tx-primary)" }}>{money(calc.igst, f.currency)}</strong></span>}
+            {calc.flatTax > 0 && <span style={{ fontSize: 12.5, color: "var(--tx-tertiary)" }}>Tax <strong style={{ color: "var(--tx-primary)" }}>{money(calc.flatTax, f.currency)}</strong></span>}
+            <span style={{ fontSize: 14, fontWeight: 700, color: "var(--accent)" }}>Total {money(calc.total, f.currency)}</span>
+          </div>
+          <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", textAlign: "right", marginTop: 5, fontStyle: "italic" }}>
+            {amountInWords(calc.total, f.currency)}
+          </p>
+        </div>
+
+        {/* ── Advanced: seller, bank, terms ── */}
+        <button type="button" className="btn btn-secondary btn-sm" style={{ alignSelf: "flex-start" }} onClick={() => setShowAdvanced((s) => !s)}>
+          {showAdvanced ? "▲ Hide" : "▼ Show"} company, bank &amp; terms
+        </button>
+
+        {showAdvanced && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "14px 16px", background: "var(--hover-bg)", borderRadius: "var(--r-md)" }}>
+            <div>
+              <p className="label-text" style={{ marginBottom: 8 }}>Your company (snapshot on this invoice)</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                {field("sellerName", "Company name")}
+                {field("sellerGstin", "GSTIN")}
+                {field("sellerPan", "PAN")}
+                {field("sellerPhone", "Phone")}
+                {field("sellerEmail", "Email")}
+                {field("sellerWebsite", "Website")}
+                <div style={{ gridColumn: "1/-1" }}>
+                  <label className="label" style={{ marginBottom: 5 }}>Address</label>
+                  <textarea className="input" rows={2} style={{ minHeight: 52 }} value={f.sellerAddress} onChange={(e) => set("sellerAddress", e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p className="label-text" style={{ marginBottom: 8 }}>Payment details</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                {field("bankAccountName", "Account name")}
+                {field("bankAccountNumber", "Account number")}
+                {field("bankName", "Bank")}
+                {field("bankIfsc", "IFSC")}
+                {field("bankBranch", "Branch")}
+                {field("upiId", "UPI ID")}
+              </div>
+            </div>
+
+            <div>
+              <p className="label-text" style={{ marginBottom: 8 }}>Terms &amp; signature</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <label className="label" style={{ marginBottom: 5 }}>Payment terms</label>
+                  <textarea className="input" rows={2} style={{ minHeight: 52 }} value={f.paymentTerms} onChange={(e) => set("paymentTerms", e.target.value)} />
+                </div>
+                {field("lateFeeNote", "Late fee note")}
+                {field("signatureName", "Authorised signatory")}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className="label" style={{ marginBottom: 5 }}>Notes</label>
+          <textarea className="input" value={f.notes} onChange={(e) => set("notes", e.target.value)} rows={2} style={{ minHeight: 52 }} placeholder="Anything else to show on the invoice…" />
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
@@ -1539,7 +1737,7 @@ export default function ClientDetailPage() {
 
       {tab === "targets" && <TargetsTab clientId={id} tasks={tasks} />}
 
-      {tab === "invoices" && <InvoicesTab clientId={id} />}
+      {tab === "invoices" && <InvoicesTab clientId={id} client={client} />}
 
       {(taskModal === "add" || taskModal === "edit") && (
         <TaskModal

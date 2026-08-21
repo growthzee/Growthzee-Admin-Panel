@@ -33,19 +33,23 @@ export async function POST(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await request.json();
-    const { clientId, issueDate, dueDate, periodYear, periodMonth, currency, taxPercent, notes, items } = body;
+    const b = await request.json();
+    const { clientId, issueDate, dueDate, periodYear, periodMonth, currency, taxPercent, notes, items } = b;
 
     if (!clientId || !issueDate) {
       return NextResponse.json({ error: "Client and issue date are required" }, { status: 400 });
     }
 
-    const lineItems: InvoiceItemInput[] = Array.isArray(items)
+    const lineItems: (InvoiceItemInput & { hsnCode?: string })[] = Array.isArray(items)
       ? items.filter((i: InvoiceItemInput) => i && i.description?.trim())
       : [];
     if (lineItems.length === 0) {
       return NextResponse.json({ error: "Add at least one line item" }, { status: 400 });
     }
+
+    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+    const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+    const taxMode = ["SIMPLE", "GST_SPLIT", "IGST"].includes(b.taxMode) ? b.taxMode : "SIMPLE";
 
     const invoice = await prisma.invoice.create({
       data: {
@@ -56,11 +60,45 @@ export async function POST(request: NextRequest) {
         periodYear: periodYear ? Number(periodYear) : null,
         periodMonth: periodMonth ? Number(periodMonth) : null,
         currency: currency || "INR",
-        taxPercent: Number(taxPercent) || 0,
-        notes: notes || null,
+        taxPercent: num(taxPercent),
+        notes: str(notes),
+
+        // Seller snapshot — frozen so historical invoices stay accurate
+        sellerName: str(b.sellerName), sellerAddress: str(b.sellerAddress),
+        sellerGstin: str(b.sellerGstin), sellerPan: str(b.sellerPan),
+        sellerPhone: str(b.sellerPhone), sellerEmail: str(b.sellerEmail),
+        sellerWebsite: str(b.sellerWebsite),
+
+        // Buyer
+        buyerGstin: str(b.buyerGstin), buyerAddress: str(b.buyerAddress),
+        placeOfSupply: str(b.placeOfSupply),
+
+        // Tax
+        taxMode,
+        cgstPercent: taxMode === "GST_SPLIT" ? num(b.cgstPercent) : 0,
+        sgstPercent: taxMode === "GST_SPLIT" ? num(b.sgstPercent) : 0,
+        igstPercent: taxMode === "IGST" ? num(b.igstPercent) : 0,
+
+        // Adjustments
+        discount: num(b.discount),
+        roundOff: num(b.roundOff),
+
+        // References
+        poNumber: str(b.poNumber), projectRef: str(b.projectRef),
+
+        // Terms
+        paymentTerms: str(b.paymentTerms), lateFeeNote: str(b.lateFeeNote),
+        signatureName: str(b.signatureName),
+
+        // Payment details
+        bankName: str(b.bankName), bankAccountName: str(b.bankAccountName),
+        bankAccountNumber: str(b.bankAccountNumber), bankIfsc: str(b.bankIfsc),
+        bankBranch: str(b.bankBranch), upiId: str(b.upiId),
+
         items: {
           create: lineItems.map((i) => ({
             description: i.description.trim(),
+            hsnCode: str(i.hsnCode),
             quantity: Number(i.quantity) || 1,
             unitPrice: Number(i.unitPrice) || 0,
           })),

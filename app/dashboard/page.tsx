@@ -14,7 +14,6 @@ const EMPLOYEE_BIRTHDAYS: { name: string; dob: string }[] = [
   { name: "Riya Kashyap",          dob: "09/05/1999" },
   { name: "Ashlesha Kadwey",       dob: "15/06/2002" },
   { name: "Pankaj Chandrawanshi",  dob: "25/01/2000" },
-  { name: "Diya Sharma",           dob: "31/12/2003" },
   { name: "Rahman Khan",           dob: "24/01/1999" },
 ];
 

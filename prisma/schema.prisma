@@ -137,6 +137,47 @@ model Invoice {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
+  // ── Seller snapshot (frozen at raise time so old invoices never change) ──
+  sellerName    String?
+  sellerAddress String?
+  sellerGstin   String?
+  sellerPan     String?
+  sellerPhone   String?
+  sellerEmail   String?
+  sellerWebsite String?
+
+  // ── Buyer / place of supply ──
+  buyerGstin    String?
+  buyerAddress  String?
+  placeOfSupply String?
+
+  // ── Tax treatment: SIMPLE | GST_SPLIT (CGST+SGST) | IGST ──
+  taxMode     String @default("SIMPLE")
+  cgstPercent Float  @default(0)
+  sgstPercent Float  @default(0)
+  igstPercent Float  @default(0)
+
+  // ── Adjustments ──
+  discount Float @default(0)
+  roundOff Float @default(0)
+
+  // ── Reference metadata ──
+  poNumber   String?
+  projectRef String?
+
+  // ── Terms & signature ──
+  paymentTerms  String?
+  lateFeeNote   String?
+  signatureName String?
+
+  // ── Payment details ──
+  bankName          String?
+  bankAccountName   String?
+  bankAccountNumber String?
+  bankIfsc          String?
+  bankBranch        String?
+  upiId             String?
+
   @@index([clientId])
 }
 
@@ -145,10 +186,42 @@ model InvoiceItem {
   invoiceId   String
   invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   description String
+  hsnCode     String?
   quantity    Float   @default(1)
   unitPrice   Float   @default(0)
 
   @@index([invoiceId])
+}
+
+/// Single row holding the agency's own billing details, used to prefill invoices
+model CompanyProfile {
+  id      String @id @default("default")
+  name    String @default("GrowthZee CRM")
+  address String?
+  gstin   String?
+  pan     String?
+  phone   String?
+  email   String?
+  website String?
+
+  bankName          String?
+  bankAccountName   String?
+  bankAccountNumber String?
+  bankIfsc          String?
+  bankBranch        String?
+  upiId             String?
+
+  defaultTaxMode String @default("GST_SPLIT")
+  defaultCgst    Float  @default(9)
+  defaultSgst    Float  @default(9)
+  defaultIgst    Float  @default(18)
+  defaultCurrency String @default("INR")
+
+  paymentTerms  String?
+  lateFeeNote   String?
+  signatureName String?
+
+  updatedAt DateTime @updatedAt @default(now())
 }
 
 enum InvoiceStatus {
