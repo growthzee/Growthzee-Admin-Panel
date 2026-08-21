@@ -6,14 +6,16 @@ import Link from "next/link";
 
 // Employee birthdays (DD/MM/YYYY)
 const EMPLOYEE_BIRTHDAYS: { name: string; dob: string }[] = [
-  { name: "Simran Singh",          dob: "17/10/2001" },
+ 
   { name: "Ayan Pakhira",          dob: "19/07/1995" },
   { name: "Ashutosh Bhaskar",      dob: "31/03/1997" },
   { name: "Arindam Biswas",        dob: "28/10/2003" },
-  { name: "Ritik Singh",           dob: "20/08/2001" },
+  { name: "Ritik Singh",           dob: "16/09/2001" },
   { name: "Riya Kashyap",          dob: "09/05/1999" },
   { name: "Ashlesha Kadwey",       dob: "15/06/2002" },
   { name: "Pankaj Chandrawanshi",  dob: "25/01/2000" },
+  { name: "Diya Sharma",           dob: "31/12/2003" },
+  { name: "Rahman Khan",           dob: "24/01/1999" },
 ];
 
 type BirthdayEntry = { name: string; isToday: boolean; isTomorrow: boolean };

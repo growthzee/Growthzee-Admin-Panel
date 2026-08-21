@@ -47,14 +47,19 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { name, email, phone, department, position, status } = body;
+    const { name, email, phone, department, position, status, dateOfBirth } = body;
 
     if (!name || !email || !department || !position) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
     const employee = await prisma.employee.create({
-      data: { name, email, phone, department, position, status: status || "ACTIVE" },
+      data: {
+        name, email, phone, department, position,
+        status: status || "ACTIVE",
+        // Stored at UTC noon so the date never shifts across timezones
+        dateOfBirth: dateOfBirth ? new Date(`${dateOfBirth}T12:00:00Z`) : null,
+      },
       include: { tasks: true },
     });
 

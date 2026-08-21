@@ -3,8 +3,10 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { formatDate } from "@/lib/utils";
 
+import { resolveBirthday, toDateInputValue } from "@/lib/birthdays";
+
 type Task = { id: string; status: string; title: string; priority: string; startDate: string; endDate: string; completedAt?: string | null };
-type Employee = { id: string; name: string; email: string; phone?: string; department: string; position: string; status: string; portalEnabled: boolean; joinedAt: string; tasks: Task[] };
+type Employee = { id: string; name: string; email: string; phone?: string; department: string; position: string; status: string; portalEnabled: boolean; joinedAt: string; dateOfBirth?: string | null; tasks: Task[] };
 
 const DEPTS    = ["Engineering","Design","Marketing","Sales","HR","Finance","Operations"];
 const STATUSES = ["ACTIVE","INACTIVE","ON_LEAVE"];
@@ -14,34 +16,15 @@ const PAGE_SIZE = 8;
 const BUCKET_COLORS: Record<string, string> = { Active: "var(--green)", "On Leave": "var(--amber)", Inactive: "var(--red)" };
 const DEPT_COLORS: Record<string, string> = { Engineering: "#7c3aed", Design: "#ec4899", Marketing: "#2383E2", Sales: "#0F9D58", HR: "#D97706", Finance: "#0891b2", Operations: "#db2777" };
 
-// Employee birthdays (DD/MM/YYYY)
-const EMPLOYEE_BIRTHDAYS: Record<string, string> = {
-  "Simran Singh":          "17/10/2001",
-  "Ayan Pakhira":          "19/07/1995",
-  "Ashutosh Bhaskar":      "31/03/1997",
-  "Arindam Biswas":        "28/10/2003",
-  "Ritik Singh":           "16/09/2001",
-  "Riya Kashyap":          "09/05/1999",
-  "Ashlesha Kadwey":       "15/06/2002",
-  "Pankaj Chandrawanshi":  "25/01/2000",
-};
-
 type BirthdayStatus = "today" | "tomorrow" | null;
 
-function getBirthdayStatus(name: string): BirthdayStatus {
-  const dob = EMPLOYEE_BIRTHDAYS[name];
-  if (!dob) return null;
-  const [dd, mm] = dob.split("/").map(Number);
-  const now      = new Date();
-  const today     = { d: now.getDate(),                          m: now.getMonth() + 1 };
-  const tmrw      = new Date(now); tmrw.setDate(tmrw.getDate() + 1);
-  const tomorrow  = { d: tmrw.getDate(),                         m: tmrw.getMonth() + 1 };
-  if (dd === today.d    && mm === today.m)    return "today";
-  if (dd === tomorrow.d && mm === tomorrow.m) return "tomorrow";
+/** Reads the stored date of birth, falling back to the legacy name-matched list */
+function getBirthdayStatus(emp: { name: string; dateOfBirth?: string | null }): BirthdayStatus {
+  const b = resolveBirthday(emp);
+  if (!b) return null;
+  if (b.isToday) return "today";
+  if (b.isTomorrow) return "tomorrow";
   return null;
-}
-function getBirthdayAlerts(): { name: string; status: BirthdayStatus }[] {
-  return Object.keys(EMPLOYEE_BIRTHDAYS).map(name => ({ name, status: getBirthdayStatus(name) })).filter(b => b.status !== null);
 }
 
 function employeeMetrics(e: Employee, now: Date) {
@@ -76,7 +59,11 @@ function dueLabel(date: Date | string, now: Date): string {
 }
 
 function Modal({ emp, onClose, onSave }: { emp?: Employee|null; onClose:()=>void; onSave:()=>void }) {
-  const [f, setF] = useState({ name:emp?.name||"", email:emp?.email||"", phone:emp?.phone||"", department:emp?.department||DEPTS[0], position:emp?.position||"", status:emp?.status||"ACTIVE" });
+  const [f, setF] = useState({
+    name: emp?.name || "", email: emp?.email || "", phone: emp?.phone || "",
+    department: emp?.department || DEPTS[0], position: emp?.position || "",
+    status: emp?.status || "ACTIVE", dateOfBirth: toDateInputValue(emp?.dateOfBirth),
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   async function submit(e: React.FormEvent) {
@@ -127,6 +114,13 @@ function Modal({ emp, onClose, onSave }: { emp?: Employee|null; onClose:()=>void
               <div>
                 <label className="label" style={{ marginBottom:5 }}>Position *</label>
                 <input className="input" required value={f.position} onChange={e => setF({ ...f, position: e.target.value })} placeholder="Position" />
+              </div>
+              <div style={{ gridColumn:"1/-1" }}>
+                <label className="label" style={{ marginBottom:5 }}>Date of birth 🎂</label>
+                <input className="input" type="date" value={f.dateOfBirth} onChange={e => setF({ ...f, dateOfBirth: e.target.value })} />
+                <p style={{ fontSize:11.5, color:"var(--tx-tertiary)", marginTop:4 }}>
+                  Used for birthday reminders on the dashboard and their profile
+                </p>
               </div>
             </div>
             <div style={{ display:"flex", gap:8, marginTop:4 }}>
@@ -210,10 +204,8 @@ export default function EmployeesPage() {
   const [page, setPage] = useState(1);
   const [modal, setModal] = useState<"add"|"edit"|"delete"|null>(null);
   const [selected, setSelected] = useState<Employee|null>(null);
-  const [birthdayAlerts, setBirthdayAlerts] = useState<{ name: string; status: BirthdayStatus }[]>([]);
   const now = useMemo(() => new Date(), []);
 
-  useEffect(() => { setBirthdayAlerts(getBirthdayAlerts()); }, []);
 
   const fetchEmployees = useCallback(async () => {
     setLoading(true);
@@ -224,8 +216,8 @@ export default function EmployeesPage() {
   }, []);
   useEffect(() => { fetchEmployees(); }, [fetchEmployees]);
 
-  const todayBirthdays    = birthdayAlerts.filter(b => b.status === "today");
-  const tomorrowBirthdays = birthdayAlerts.filter(b => b.status === "tomorrow");
+  const todayBirthdays    = employees.filter(e => getBirthdayStatus(e) === "today");
+  const tomorrowBirthdays = employees.filter(e => getBirthdayStatus(e) === "tomorrow");
 
   const withMetrics = useMemo(() => employees.map(e => ({ e, m: employeeMetrics(e, now) })), [employees, now]);
   const allTasks = useMemo(() => employees.flatMap(e => e.tasks), [employees]);
@@ -441,7 +433,7 @@ export default function EmployeesPage() {
                       </thead>
                       <tbody>
                         {pageEmployees.map(({ e: emp, m }) => {
-                          const bdayStatus = getBirthdayStatus(emp.name);
+                          const bdayStatus = getBirthdayStatus(emp);
                           return (
                             <tr key={emp.id} className={bdayStatus === "today" ? "bday-row-highlight" : undefined} onClick={() => window.location.assign(`/dashboard/employees/${emp.id}`)}>
                               <td>

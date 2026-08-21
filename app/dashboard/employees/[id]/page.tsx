@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatDate } from "@/lib/utils";
+import { resolveBirthday, toDateInputValue, countdownLabel } from "@/lib/birthdays";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Task = {
@@ -32,6 +33,7 @@ type Employee = {
   status: string;
   portalEnabled: boolean;
   joinedAt: string;
+  dateOfBirth?: string | null;
   tasks: Omit<Task, "_type" | "client">[];
 };
 
@@ -404,7 +406,7 @@ export default function EmployeeDetailPage() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   const [editEmp, setEditEmp] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", phone: "", department: "", position: "", status: "" });
+  const [form, setForm] = useState({ name: "", email: "", phone: "", department: "", position: "", status: "", dateOfBirth: "" });
   const [saving, setSaving] = useState(false);
 
   // Task tab filters
@@ -427,6 +429,7 @@ export default function EmployeeDetailPage() {
     setForm({
       name: ed.name, email: ed.email, phone: ed.phone || "",
       department: ed.department, position: ed.position, status: ed.status,
+      dateOfBirth: toDateInputValue(ed.dateOfBirth),
     });
     const internal: Task[] = (ed.tasks || []).map((t: Omit<Task, "_type" | "client">) => ({ ...t, _type: "internal" as const }));
     const client: Task[] = (Array.isArray(cd) ? cd : []).map((t: Omit<Task, "_type">) => ({ ...t, _type: "client" as const }));
@@ -507,6 +510,8 @@ export default function EmployeeDetailPage() {
   }
   const groups = Array.from(groupMap.entries()).sort((a, b) => b[1].length - a[1].length);
 
+  const birthday = resolveBirthday(employee);
+
   // Tasks tab filtering
   const tasksForTable = allTasks.filter((t) => {
     if (sourceFilter !== "all" && t._type !== sourceFilter) return false;
@@ -540,6 +545,8 @@ export default function EmployeeDetailPage() {
                 {employee.status.replace("_", " ")}
               </span>
               {employee.portalEnabled && <span className="badge badge-blue">Portal enabled</span>}
+              {birthday?.isToday && <span className="badge" style={{ background: "linear-gradient(135deg,#7c3aed,#ec4899)", color: "#fff" }}>🎂 Birthday today!</span>}
+              {birthday?.isTomorrow && <span className="badge badge-purple">🎁 Birthday tomorrow</span>}
             </div>
             <p style={{ fontSize: 13, color: "var(--tx-tertiary)", marginTop: 3 }}>{employee.position} · {employee.department}</p>
           </div>
@@ -672,6 +679,37 @@ export default function EmployeeDetailPage() {
                         <span className="property-value" style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
                       </div>
                     ))}
+
+                    {/* Birthday */}
+                    <div className="property-row">
+                      <span className="property-label">🎂 Birthday</span>
+                      <span className="property-value" style={{ fontSize: 12.5 }}>
+                        {birthday
+                          ? <>{birthday.label}{birthday.year ? ` ${birthday.year}` : ""}</>
+                          : <span style={{ color: "var(--tx-disabled)" }}>Not set</span>}
+                      </span>
+                    </div>
+                    {birthday && (
+                      <div
+                        style={{
+                          display: "flex", alignItems: "center", gap: 9, marginTop: 8,
+                          padding: "10px 11px", borderRadius: "var(--r-md)",
+                          background: birthday.isToday ? "linear-gradient(135deg, rgba(124,58,237,.16), rgba(236,72,153,.14))" : "var(--hover-bg)",
+                          border: birthday.isToday ? "1px solid rgba(124,58,237,.35)" : "1px solid transparent",
+                        }}
+                      >
+                        <span style={{ fontSize: 18 }}>{birthday.isToday ? "🎉" : "🎂"}</span>
+                        <div style={{ minWidth: 0 }}>
+                          <p style={{ fontSize: 12.5, fontWeight: 600, color: birthday.isToday ? "var(--accent)" : "var(--tx-primary)" }}>
+                            {birthday.isToday ? "Birthday is today!" : `Next birthday ${countdownLabel(birthday)}`}
+                          </p>
+                          <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)" }}>
+                            {birthday.nextLabel}{birthday.age !== null ? ` · turning ${birthday.age + (birthday.isToday ? 0 : 1)}` : ""}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     <button className="btn btn-secondary" style={{ width: "100%", marginTop: 10, fontSize: 12.5 }} onClick={() => setEditEmp(true)}>Edit employee</button>
                     <Link href={`/dashboard/employees/${id}/attendance`} className="btn btn-secondary" style={{ width: "100%", marginTop: 6, fontSize: 12.5, textDecoration: "none", justifyContent: "center" }}>
                       Attendance calendar
@@ -701,6 +739,10 @@ export default function EmployeeDetailPage() {
                       <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} style={{ fontSize: 12.5 }}>
                         {STATUSES.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
                       </select>
+                    </div>
+                    <div>
+                      <label className="label" style={{ marginBottom: 4 }}>Date of birth 🎂</label>
+                      <input className="input" type="date" value={form.dateOfBirth} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} style={{ fontSize: 12.5 }} />
                     </div>
                     <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
                       <button type="button" className="btn btn-secondary" style={{ flex: 1, fontSize: 12 }} onClick={() => setEditEmp(false)}>Cancel</button>

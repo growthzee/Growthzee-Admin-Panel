@@ -36,11 +36,17 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
   try {
     const body = await request.json();
-    const { name, email, phone, department, position, status } = body;
+    const { name, email, phone, department, position, status, dateOfBirth } = body;
 
     const employee = await prisma.employee.update({
       where: { id },
-      data: { name, email, phone, department, position, status },
+      data: {
+        name, email, phone, department, position, status,
+        // Stored at UTC noon so the date never shifts across timezones
+        ...(dateOfBirth !== undefined
+          ? { dateOfBirth: dateOfBirth ? new Date(`${dateOfBirth}T12:00:00Z`) : null }
+          : {}),
+      },
       include: { tasks: true },
     });
 

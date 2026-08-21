@@ -42,16 +42,7 @@ export function parseDateOnly(value: string) {
 }
 
 /**
- * Every date in the inclusive range, excluding Sundays — matching the
- * weekend convention used by the attendance calendar.
+ * Every working date in the inclusive range (Mon–Fri), re-exported from the
+ * shared work schedule so leave and attendance never disagree.
  */
-export function workingDatesInRange(start: Date, end: Date): Date[] {
-  const dates: Date[] = [];
-  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 12, 0, 0);
-  const last = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 12, 0, 0);
-  while (cursor <= last) {
-    if (cursor.getDay() !== 0) dates.push(new Date(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return dates;
-}
+export { workingDatesInRange } from "./workSchedule";

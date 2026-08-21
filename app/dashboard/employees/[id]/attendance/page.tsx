@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { isWorkingDay, WORK_HOURS_LABEL, WORK_WEEK_LABEL } from "@/lib/workSchedule";
 
 type AS = "PRESENT" | "ABSENT" | "HALF_DAY" | "LEAVE" | "HOLIDAY" | "WEEKEND";
 type AR = { id: string; date: string; status: AS; note?: string };
@@ -89,7 +90,7 @@ export default function AttendancePage() {
     const day = i + 1;
     const d = new Date(yr, mo - 1, day);
     const k = dk(d);
-    const isWeekend = d.getDay() === 0;
+    const isWeekend = !isWorkingDay(d);
     const rec = records.get(k);
     return {
       day, k, isWeekend,
@@ -167,6 +168,9 @@ export default function AttendancePage() {
             </div>
             <p style={{ fontSize: 13, color: "var(--tx-tertiary)", marginTop: 3 }}>
               {emp ? `${emp.name} · ${emp.position} · ${emp.department}` : "Loading…"}
+            </p>
+            <p style={{ fontSize: 11.5, color: "var(--tx-tertiary)", marginTop: 2 }}>
+              🕘 {WORK_WEEK_LABEL} · {WORK_HOURS_LABEL}
             </p>
           </div>
         </div>
@@ -337,28 +341,21 @@ export default function AttendancePage() {
                     </p>
                   )}
 
-                  {/* Hover picker */}
-                  {markable && (
+                  {/* Hover picker — only outside bulk mode, otherwise it would
+                      swallow the click that toggles cell selection */}
+                  {markable && !bulkMode && (
                     <div className="cal-picker" onClick={(e) => e.stopPropagation()}>
-                      {bulkMode ? (
-                        <div style={{ gridColumn: "span 3", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <p style={{ fontSize: 10.5, color: isSel ? "var(--accent)" : "var(--tx-tertiary)", textAlign: "center", fontWeight: 500 }}>
-                            {isSel ? "✓ Selected" : "Click to select"}
-                          </p>
-                        </div>
-                      ) : (
-                        STATUSES.map((s) => (
-                          <button
-                            key={s}
-                            className="cal-pick-btn"
-                            onClick={() => markDay(k, s)}
-                            title={`Mark ${CFG[s].label}`}
-                            style={{ background: CFG[s].bg, color: CFG[s].color }}
-                          >
-                            {CFG[s].short}
-                          </button>
-                        ))
-                      )}
+                      {STATUSES.map((s) => (
+                        <button
+                          key={s}
+                          className="cal-pick-btn"
+                          onClick={() => markDay(k, s)}
+                          title={`Mark ${CFG[s].label}`}
+                          style={{ background: CFG[s].bg, color: CFG[s].color }}
+                        >
+                          {CFG[s].short}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -375,7 +372,7 @@ export default function AttendancePage() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
           {([
-            ["Working days", workDays, "excludes Sundays", "var(--tx-primary)"],
+            ["Working days", workDays, "Mon – Fri", "var(--tx-primary)"],
             ["Days present", present, "full attendance", "var(--green)"],
             ["Half days", halfDay, `counts as ${halfDay * 0.5} days`, "var(--blue)"],
             ["Days on leave", leave, "approved", "var(--amber)"],

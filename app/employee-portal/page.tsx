@@ -5,6 +5,7 @@ import { formatDate } from "@/lib/utils";
 import TaskCategoryBadge from "@/components/TaskCategoryBadge";
 import { LEAVE_REASONS, LEAVE_STATUS_BADGE, LEAVE_STATUS_LABEL, reasonEmoji, reasonLabel } from "@/lib/leave";
 import { WORK_LINK_TYPES, detectLinkType, hostOf, isValidUrl, linkTypeEmoji, linkTypeLabel } from "@/lib/workLinks";
+import { isWorkingDay, WORK_HOURS_LABEL, WORK_WEEK_LABEL } from "@/lib/workSchedule";
 
 type LeaveRequest = {
   id: string; reason: string; startDate: string; endDate: string; days: number;
@@ -265,14 +266,14 @@ function LeaveModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Working days (excluding Sundays) in the chosen range
+  // Working days (Mon–Fri) in the chosen range
   let days = 0;
   if (startDate && endDate) {
     const s = new Date(startDate + "T12:00:00");
     const e = new Date(endDate + "T12:00:00");
     if (e >= s) {
       for (const c = new Date(s); c <= e; c.setDate(c.getDate() + 1)) {
-        if (c.getDay() !== 0) days++;
+        if (isWorkingDay(c)) days++;
       }
     }
   }
@@ -423,7 +424,7 @@ function LeaveModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => 
                 <p style={{ fontSize: 12.5, color: "var(--accent)", fontWeight: 500 }}>
                   {prettyDate(startDate)} → {prettyDate(endDate)}
                   <span style={{ color: "var(--tx-tertiary)", fontWeight: 400 }}>
-                    {" "}· {days} working day{days === 1 ? "" : "s"} (Sundays excluded)
+                    {" "}· {days} working day{days === 1 ? "" : "s"} (Mon–Fri)
                   </span>
                 </p>
               </div>
@@ -834,7 +835,9 @@ export default function EmployeePortalPage() {
           <div className="topbar-avatar">{employee.name.split(" ").filter(Boolean).map((n) => n[0]).join("").toUpperCase().slice(0, 2)}</div>
           <div>
             <p className="name" style={{ fontSize: 13, fontWeight: 600, color: "var(--tx-primary)", lineHeight: 1.2 }}>{employee.name}</p>
-            <p className="role" style={{ fontSize: 11, color: "var(--tx-tertiary)", lineHeight: 1.2 }}>{employee.position} · {employee.department}</p>
+            <p className="role" style={{ fontSize: 11, color: "var(--tx-tertiary)", lineHeight: 1.2 }}>
+              {employee.position} · {employee.department} · 🕘 {WORK_WEEK_LABEL} {WORK_HOURS_LABEL}
+            </p>
           </div>
         </div>
         <div style={{ flex: 1 }} />
